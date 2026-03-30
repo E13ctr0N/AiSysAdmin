@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import MagicMock
 from agensysadmin.ssh_manager import SSHManager, CommandResult
-from agensysadmin.tools.docker import docker_ps_impl, docker_logs_impl, docker_compose_impl
+from agensysadmin.tools.docker import docker_ps_impl, docker_logs_impl, docker_compose_impl, docker_images_impl
 
 
 @pytest.fixture
@@ -125,3 +125,24 @@ class TestDockerCompose:
         )
         result = docker_compose_impl(mock_ssh, "prod", action="up", path="/opt/missing")
         assert result["success"] is False
+
+
+class TestDockerImages:
+    def test_docker_images(self, mock_ssh):
+        mock_ssh.execute.return_value = CommandResult(
+            stdout="nginx\tlatest\ta1b2c3d4e5f6\t2 weeks ago\t142MB\npostgres\t15\tf6e5d4c3b2a1\t3 weeks ago\t379MB\n",
+            stderr="", exit_code=0, duration_ms=80,
+        )
+        result = docker_images_impl(mock_ssh, "prod")
+        assert result["success"] is True
+        assert len(result["images"]) == 2
+        assert result["images"][0]["repository"] == "nginx"
+        assert result["images"][0]["tag"] == "latest"
+        assert result["images"][0]["size"] == "142MB"
+
+    def test_docker_images_empty(self, mock_ssh):
+        mock_ssh.execute.return_value = CommandResult(
+            stdout="", stderr="", exit_code=0, duration_ms=50,
+        )
+        result = docker_images_impl(mock_ssh, "prod")
+        assert result["images"] == []

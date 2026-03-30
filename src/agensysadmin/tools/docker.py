@@ -62,6 +62,28 @@ def docker_logs_impl(
     }
 
 
+def docker_images_impl(ssh: SSHManager, server: str) -> dict:
+    result = ssh.execute(
+        server, "docker images --format '{{.Repository}}\t{{.Tag}}\t{{.ID}}\t{{.CreatedSince}}\t{{.Size}}'"
+    )
+    if result.exit_code != 0:
+        return {"success": False, "exit_code": result.exit_code, "stderr": result.stderr, "images": []}
+    images = []
+    for line in result.stdout.strip().split("\n"):
+        if not line.strip():
+            continue
+        parts = line.split("\t")
+        if len(parts) >= 5:
+            images.append({
+                "repository": parts[0],
+                "tag": parts[1],
+                "id": parts[2],
+                "created": parts[3],
+                "size": parts[4],
+            })
+    return {"success": True, "images": images}
+
+
 def docker_compose_impl(
     ssh: SSHManager,
     server: str,

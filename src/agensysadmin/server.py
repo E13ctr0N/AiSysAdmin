@@ -14,6 +14,12 @@ from agensysadmin.tools.monitoring import (
     process_list_impl,
     system_info_impl,
 )
+from agensysadmin.tools.docker import (
+    docker_compose_impl,
+    docker_images_impl,
+    docker_logs_impl,
+    docker_ps_impl,
+)
 from agensysadmin.tools.management import (
     edit_config_impl,
     install_package_impl,
@@ -121,3 +127,31 @@ def edit_config(server: str, path: str, content: str | None = None, backup: bool
     """Read or write a config file. Omit content to read. Provide content to write (creates .bak backup by default)."""
     _ensure_connected(server)
     return edit_config_impl(_ssh, server, path=path, content=content, backup=backup)
+
+
+@mcp.tool()
+def docker_ps(server: str, all_containers: bool = False) -> dict:
+    """List Docker containers. Set all_containers=True to include stopped containers."""
+    _ensure_connected(server)
+    return docker_ps_impl(_ssh, server, all_containers=all_containers)
+
+
+@mcp.tool()
+def docker_logs(server: str, container: str, tail: int | None = None) -> dict:
+    """Get logs from a Docker container. Use tail to limit number of lines."""
+    _ensure_connected(server)
+    return docker_logs_impl(_ssh, server, container=container, tail=tail)
+
+
+@mcp.tool()
+def docker_compose(server: str, action: str, path: str) -> dict:
+    """Run docker compose action in a directory. action: 'up', 'down', 'restart', 'stop', 'start', 'ps', 'logs', 'pull', 'build'."""
+    _ensure_connected(server)
+    return docker_compose_impl(_ssh, server, action=action, path=path)
+
+
+@mcp.tool()
+def docker_images(server: str) -> dict:
+    """List Docker images on a server."""
+    _ensure_connected(server)
+    return docker_images_impl(_ssh, server)

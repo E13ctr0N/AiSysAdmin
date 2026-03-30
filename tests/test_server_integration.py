@@ -22,6 +22,10 @@ def test_all_tools_registered():
         "install_package",
         "manage_service",
         "edit_config",
+        "docker_ps",
+        "docker_logs",
+        "docker_compose",
+        "docker_images",
     }
 
     # Try _tool_manager._tools first (dict keyed by tool name)
