@@ -14,6 +14,11 @@ from agensysadmin.tools.monitoring import (
     process_list_impl,
     system_info_impl,
 )
+from agensysadmin.tools.management import (
+    edit_config_impl,
+    install_package_impl,
+    manage_service_impl,
+)
 
 mcp = FastMCP("agensysadmin")
 
@@ -95,3 +100,24 @@ def execute_command(server: str, command: str, timeout: int | None = None) -> di
     """Execute an arbitrary shell command on a remote server. Returns stdout, stderr, exit_code, duration_ms."""
     _ensure_connected(server)
     return execute_command_impl(_ssh, server, command, timeout=timeout)
+
+
+@mcp.tool()
+def install_package(server: str, packages: list[str], update: bool = True) -> dict:
+    """Install packages via apt on a remote server. Set update=False to skip apt update."""
+    _ensure_connected(server)
+    return install_package_impl(_ssh, server, packages=packages, update=update)
+
+
+@mcp.tool()
+def manage_service(server: str, service: str, action: str) -> dict:
+    """Manage a systemd service. action: 'start', 'stop', 'restart', 'reload', 'enable', 'disable', 'status'."""
+    _ensure_connected(server)
+    return manage_service_impl(_ssh, server, service=service, action=action)
+
+
+@mcp.tool()
+def edit_config(server: str, path: str, content: str | None = None, backup: bool = True) -> dict:
+    """Read or write a config file. Omit content to read. Provide content to write (creates .bak backup by default)."""
+    _ensure_connected(server)
+    return edit_config_impl(_ssh, server, path=path, content=content, backup=backup)

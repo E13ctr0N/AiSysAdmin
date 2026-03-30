@@ -19,6 +19,9 @@ def test_all_tools_registered():
         "check_ports",
         "process_list",
         "execute_command",
+        "install_package",
+        "manage_service",
+        "edit_config",
     }
 
     # Try _tool_manager._tools first (dict keyed by tool name)
