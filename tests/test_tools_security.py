@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import MagicMock
 from agensysadmin.ssh_manager import SSHManager, CommandResult
-from agensysadmin.tools.security import check_updates_impl
+from agensysadmin.tools.security import check_updates_impl, firewall_status_impl
 
 
 @pytest.fixture
@@ -54,3 +54,47 @@ class TestCheckUpdates:
         result = check_updates_impl(mock_ssh, "prod", security_only=True)
         assert result["update_count"] == 1
         assert result["packages"][0]["name"] == "libssl3"
+
+
+class TestFirewallStatus:
+    def test_ufw_active(self, mock_ssh):
+        mock_ssh.execute.return_value = CommandResult(
+            stdout=(
+                "Status: active\n"
+                "Logging: on (low)\n"
+                "Default: deny (incoming), allow (outgoing), disabled (routed)\n"
+                "New profiles: skip\n"
+                "\n"
+                "To                         Action      From\n"
+                "--                         ------      ----\n"
+                "22/tcp                     ALLOW IN    Anywhere\n"
+                "80/tcp                     ALLOW IN    Anywhere\n"
+                "443/tcp                    ALLOW IN    Anywhere\n"
+            ),
+            stderr="", exit_code=0, duration_ms=100,
+        )
+        result = firewall_status_impl(mock_ssh, "prod")
+        assert result["success"] is True
+        assert result["active"] is True
+        assert result["default_incoming"] == "deny"
+        assert result["default_outgoing"] == "allow"
+        assert len(result["rules"]) == 3
+        assert result["rules"][0]["port"] == "22/tcp"
+        assert result["rules"][0]["action"] == "ALLOW IN"
+
+    def test_ufw_inactive(self, mock_ssh):
+        mock_ssh.execute.return_value = CommandResult(
+            stdout="Status: inactive\n",
+            stderr="", exit_code=0, duration_ms=50,
+        )
+        result = firewall_status_impl(mock_ssh, "prod")
+        assert result["active"] is False
+        assert result["rules"] == []
+
+    def test_ufw_not_installed(self, mock_ssh):
+        mock_ssh.execute.return_value = CommandResult(
+            stdout="", stderr="ufw: command not found\n",
+            exit_code=127, duration_ms=20,
+        )
+        result = firewall_status_impl(mock_ssh, "prod")
+        assert result["success"] is False
