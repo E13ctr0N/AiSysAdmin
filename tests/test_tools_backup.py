@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import MagicMock
 from agensysadmin.ssh_manager import SSHManager, CommandResult
-from agensysadmin.tools.backup import create_backup_impl, list_backups_impl
+from agensysadmin.tools.backup import create_backup_impl, list_backups_impl, check_cron_impl
 
 
 @pytest.fixture
@@ -72,3 +72,40 @@ class TestListBackups:
         )
         result = list_backups_impl(mock_ssh, "prod", path="/backups")
         assert result["success"] is False
+
+
+class TestCheckCron:
+    def test_check_cron_with_jobs(self, mock_ssh):
+        mock_ssh.execute.side_effect = [
+            CommandResult(
+                stdout="0 2 * * * /usr/local/bin/backup.sh\n30 3 * * 0 /usr/local/bin/weekly-cleanup.sh\n",
+                stderr="", exit_code=0, duration_ms=20,
+            ),
+            CommandResult(
+                stdout="/etc/cron.d/certbot:\n0 */12 * * * root test -x /usr/bin/certbot && certbot -q renew\n",
+                stderr="", exit_code=0, duration_ms=30,
+            ),
+        ]
+        result = check_cron_impl(mock_ssh, "prod")
+        assert result["success"] is True
+        assert len(result["user_cron"]) == 2
+        assert result["user_cron"][0]["schedule"] == "0 2 * * *"
+        assert result["user_cron"][0]["command"] == "/usr/local/bin/backup.sh"
+        assert "certbot" in result["system_cron"]
+
+    def test_check_cron_empty(self, mock_ssh):
+        mock_ssh.execute.side_effect = [
+            CommandResult(stdout="", stderr="no crontab for root\n", exit_code=1, duration_ms=20),
+            CommandResult(stdout="", stderr="", exit_code=0, duration_ms=20),
+        ]
+        result = check_cron_impl(mock_ssh, "prod")
+        assert result["user_cron"] == []
+
+    def test_check_cron_specific_user(self, mock_ssh):
+        mock_ssh.execute.side_effect = [
+            CommandResult(stdout="*/5 * * * * /app/healthcheck.sh\n", stderr="", exit_code=0, duration_ms=20),
+            CommandResult(stdout="", stderr="", exit_code=0, duration_ms=20),
+        ]
+        result = check_cron_impl(mock_ssh, "prod", user="www-data")
+        cmd = mock_ssh.execute.call_args_list[0].args[1]
+        assert "www-data" in cmd

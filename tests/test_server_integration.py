@@ -29,6 +29,9 @@ def test_all_tools_registered():
         "check_updates",
         "firewall_status",
         "security_audit",
+        "create_backup",
+        "list_backups",
+        "check_cron",
     }
 
     # Try _tool_manager._tools first (dict keyed by tool name)

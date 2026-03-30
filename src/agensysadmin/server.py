@@ -30,6 +30,11 @@ from agensysadmin.tools.security import (
     firewall_status_impl,
     security_audit_impl,
 )
+from agensysadmin.tools.backup import (
+    check_cron_impl,
+    create_backup_impl,
+    list_backups_impl,
+)
 
 mcp = FastMCP("agensysadmin")
 
@@ -181,3 +186,24 @@ def security_audit(server: str) -> dict:
     """Run a comprehensive security audit: SSH config, auto-updates, failed logins, root users, world-writable files."""
     _ensure_connected(server)
     return security_audit_impl(_ssh, server)
+
+
+@mcp.tool()
+def create_backup(server: str, source: str, dest_dir: str, name: str | None = None) -> dict:
+    """Create a tar.gz backup of a directory. Auto-generates timestamped name if not provided."""
+    _ensure_connected(server)
+    return create_backup_impl(_ssh, server, source=source, dest_dir=dest_dir, name=name)
+
+
+@mcp.tool()
+def list_backups(server: str, path: str) -> dict:
+    """List .tar.gz backup files in a directory with sizes and dates."""
+    _ensure_connected(server)
+    return list_backups_impl(_ssh, server, path=path)
+
+
+@mcp.tool()
+def check_cron(server: str, user: str | None = None) -> dict:
+    """List cron jobs — user crontab and system /etc/cron.d/ entries."""
+    _ensure_connected(server)
+    return check_cron_impl(_ssh, server, user=user)

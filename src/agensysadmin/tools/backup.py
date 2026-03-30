@@ -76,3 +76,32 @@ def list_backups_impl(
             })
 
     return {"success": True, "backups": backups}
+
+
+def check_cron_impl(
+    ssh: SSHManager,
+    server: str,
+    user: str | None = None,
+) -> dict:
+    user_flag = f"-u {user}" if user else ""
+    user_cron_result = ssh.execute(server, f"sudo crontab {user_flag} -l 2>/dev/null")
+
+    user_cron = []
+    for line in user_cron_result.stdout.strip().split("\n"):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split(None, 5)
+        if len(parts) >= 6:
+            user_cron.append({
+                "schedule": " ".join(parts[:5]),
+                "command": parts[5],
+            })
+
+    system_cron_result = ssh.execute(server, "sudo cat /etc/cron.d/* 2>/dev/null")
+
+    return {
+        "success": True,
+        "user_cron": user_cron,
+        "system_cron": system_cron_result.stdout.strip(),
+    }
