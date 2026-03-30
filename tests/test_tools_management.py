@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import MagicMock, call
 from agensysadmin.ssh_manager import SSHManager, CommandResult
-from agensysadmin.tools.management import install_package_impl
+from agensysadmin.tools.management import install_package_impl, manage_service_impl
 
 
 @pytest.fixture
@@ -52,3 +52,55 @@ class TestInstallPackage:
         result = install_package_impl(mock_ssh, "prod", packages=["htop"], update=False)
         assert mock_ssh.execute.call_count == 1
         assert "install" in mock_ssh.execute.call_args.args[1]
+
+
+class TestManageService:
+    def test_start_service(self, mock_ssh):
+        mock_ssh.execute.return_value = CommandResult(
+            stdout="", stderr="", exit_code=0, duration_ms=500
+        )
+        result = manage_service_impl(mock_ssh, "prod", service="nginx", action="start")
+        assert result["success"] is True
+        assert "systemctl start nginx" in mock_ssh.execute.call_args.args[1]
+
+    def test_stop_service(self, mock_ssh):
+        mock_ssh.execute.return_value = CommandResult(
+            stdout="", stderr="", exit_code=0, duration_ms=500
+        )
+        result = manage_service_impl(mock_ssh, "prod", service="nginx", action="stop")
+        assert "systemctl stop nginx" in mock_ssh.execute.call_args.args[1]
+
+    def test_restart_service(self, mock_ssh):
+        mock_ssh.execute.return_value = CommandResult(
+            stdout="", stderr="", exit_code=0, duration_ms=800
+        )
+        result = manage_service_impl(mock_ssh, "prod", service="nginx", action="restart")
+        assert result["success"] is True
+        assert "systemctl restart nginx" in mock_ssh.execute.call_args.args[1]
+
+    def test_enable_service(self, mock_ssh):
+        mock_ssh.execute.return_value = CommandResult(
+            stdout="Created symlink\n", stderr="", exit_code=0, duration_ms=300
+        )
+        result = manage_service_impl(mock_ssh, "prod", service="nginx", action="enable")
+        assert "systemctl enable nginx" in mock_ssh.execute.call_args.args[1]
+
+    def test_disable_service(self, mock_ssh):
+        mock_ssh.execute.return_value = CommandResult(
+            stdout="Removed symlink\n", stderr="", exit_code=0, duration_ms=300
+        )
+        result = manage_service_impl(mock_ssh, "prod", service="nginx", action="disable")
+        assert "systemctl disable nginx" in mock_ssh.execute.call_args.args[1]
+
+    def test_invalid_action(self, mock_ssh):
+        with pytest.raises(ValueError, match="Invalid action"):
+            manage_service_impl(mock_ssh, "prod", service="nginx", action="destroy")
+
+    def test_service_action_failure(self, mock_ssh):
+        mock_ssh.execute.return_value = CommandResult(
+            stdout="", stderr="Failed to start nginx.service: Unit not found.\n",
+            exit_code=5, duration_ms=200
+        )
+        result = manage_service_impl(mock_ssh, "prod", service="nginx", action="start")
+        assert result["success"] is False
+        assert result["exit_code"] == 5
