@@ -32,6 +32,7 @@ def test_all_tools_registered():
         "create_backup",
         "list_backups",
         "check_cron",
+        "generate_report",
     }
 
     # Try _tool_manager._tools first (dict keyed by tool name)

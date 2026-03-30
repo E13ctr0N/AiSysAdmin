@@ -35,6 +35,7 @@ from agensysadmin.tools.backup import (
     create_backup_impl,
     list_backups_impl,
 )
+from agensysadmin.tools.reports import generate_report_impl
 
 mcp = FastMCP("agensysadmin")
 
@@ -207,3 +208,10 @@ def check_cron(server: str, user: str | None = None) -> dict:
     """List cron jobs — user crontab and system /etc/cron.d/ entries."""
     _ensure_connected(server)
     return check_cron_impl(_ssh, server, user=user)
+
+
+@mcp.tool()
+def generate_report(server: str) -> dict:
+    """Generate a comprehensive markdown report: system info, disk usage, ports, services."""
+    _ensure_connected(server)
+    return generate_report_impl(_ssh, server)
