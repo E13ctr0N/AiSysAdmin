@@ -26,6 +26,9 @@ def test_all_tools_registered():
         "docker_logs",
         "docker_compose",
         "docker_images",
+        "check_updates",
+        "firewall_status",
+        "security_audit",
     }
 
     # Try _tool_manager._tools first (dict keyed by tool name)

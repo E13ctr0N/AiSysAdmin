@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import MagicMock
 from agensysadmin.ssh_manager import SSHManager, CommandResult
-from agensysadmin.tools.security import check_updates_impl, firewall_status_impl
+from agensysadmin.tools.security import check_updates_impl, firewall_status_impl, security_audit_impl
 
 
 @pytest.fixture
@@ -98,3 +98,40 @@ class TestFirewallStatus:
         )
         result = firewall_status_impl(mock_ssh, "prod")
         assert result["success"] is False
+
+
+class TestSecurityAudit:
+    def test_security_audit_runs_all_checks(self, mock_ssh):
+        mock_ssh.execute.side_effect = [
+            CommandResult(stdout="PermitRootLogin no\n", stderr="", exit_code=0, duration_ms=20),
+            CommandResult(stdout="PasswordAuthentication no\n", stderr="", exit_code=0, duration_ms=20),
+            CommandResult(stdout="/etc/apt/apt.conf.d/20auto-upgrades\n", stderr="", exit_code=0, duration_ms=20),
+            CommandResult(stdout="42\n", stderr="", exit_code=0, duration_ms=30),
+            CommandResult(stdout="root\n", stderr="", exit_code=0, duration_ms=20),
+            CommandResult(stdout="", stderr="", exit_code=0, duration_ms=100),
+        ]
+        result = security_audit_impl(mock_ssh, "prod")
+        assert result["success"] is True
+        assert result["checks"]["ssh"]["root_login"] == "no"
+        assert result["checks"]["ssh"]["password_auth"] == "no"
+        assert result["checks"]["auto_updates"]["enabled"] is True
+        assert result["checks"]["failed_logins"]["count"] == 42
+        assert result["checks"]["root_users"]["users"] == ["root"]
+        assert result["checks"]["world_writable"]["files"] == []
+
+    def test_security_audit_finds_issues(self, mock_ssh):
+        mock_ssh.execute.side_effect = [
+            CommandResult(stdout="PermitRootLogin yes\n", stderr="", exit_code=0, duration_ms=20),
+            CommandResult(stdout="PasswordAuthentication yes\n", stderr="", exit_code=0, duration_ms=20),
+            CommandResult(stdout="", stderr="", exit_code=1, duration_ms=20),
+            CommandResult(stdout="1523\n", stderr="", exit_code=0, duration_ms=30),
+            CommandResult(stdout="root\nbackdoor\n", stderr="", exit_code=0, duration_ms=20),
+            CommandResult(stdout="/etc/shadow\n/etc/passwd\n", stderr="", exit_code=0, duration_ms=100),
+        ]
+        result = security_audit_impl(mock_ssh, "prod")
+        assert result["checks"]["ssh"]["root_login"] == "yes"
+        assert result["checks"]["ssh"]["password_auth"] == "yes"
+        assert result["checks"]["auto_updates"]["enabled"] is False
+        assert result["checks"]["failed_logins"]["count"] == 1523
+        assert "backdoor" in result["checks"]["root_users"]["users"]
+        assert len(result["checks"]["world_writable"]["files"]) == 2

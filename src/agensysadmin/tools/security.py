@@ -93,3 +93,47 @@ def firewall_status_impl(ssh: SSHManager, server: str) -> dict:
         "rules": rules,
         "raw_output": result.stdout.strip(),
     }
+
+
+def security_audit_impl(ssh: SSHManager, server: str) -> dict:
+    root_login = ssh.execute(
+        server, "sudo grep -i '^PermitRootLogin' /etc/ssh/sshd_config | tail -1"
+    ).stdout.strip()
+    root_login_val = root_login.split()[-1] if root_login else "unknown"
+
+    password_auth = ssh.execute(
+        server, "sudo grep -i '^PasswordAuthentication' /etc/ssh/sshd_config | tail -1"
+    ).stdout.strip()
+    password_auth_val = password_auth.split()[-1] if password_auth else "unknown"
+
+    auto_updates = ssh.execute(
+        server, "ls /etc/apt/apt.conf.d/20auto-upgrades 2>/dev/null"
+    )
+    auto_updates_enabled = auto_updates.exit_code == 0 and auto_updates.stdout.strip() != ""
+
+    failed_logins = ssh.execute(
+        server, "sudo grep -c 'Failed password' /var/log/auth.log 2>/dev/null || echo 0"
+    )
+    try:
+        failed_count = int(failed_logins.stdout.strip())
+    except ValueError:
+        failed_count = 0
+
+    root_users = ssh.execute(server, "awk -F: '$3 == 0 {print $1}' /etc/passwd")
+    root_users_list = [u for u in root_users.stdout.strip().split("\n") if u.strip()]
+
+    world_writable = ssh.execute(
+        server, "sudo find /etc -type f -perm -o+w 2>/dev/null"
+    )
+    ww_files = [f for f in world_writable.stdout.strip().split("\n") if f.strip()]
+
+    return {
+        "success": True,
+        "checks": {
+            "ssh": {"root_login": root_login_val, "password_auth": password_auth_val},
+            "auto_updates": {"enabled": auto_updates_enabled},
+            "failed_logins": {"count": failed_count},
+            "root_users": {"users": root_users_list},
+            "world_writable": {"files": ww_files},
+        },
+    }

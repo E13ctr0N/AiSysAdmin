@@ -25,6 +25,11 @@ from agensysadmin.tools.management import (
     install_package_impl,
     manage_service_impl,
 )
+from agensysadmin.tools.security import (
+    check_updates_impl,
+    firewall_status_impl,
+    security_audit_impl,
+)
 
 mcp = FastMCP("agensysadmin")
 
@@ -155,3 +160,24 @@ def docker_images(server: str) -> dict:
     """List Docker images on a server."""
     _ensure_connected(server)
     return docker_images_impl(_ssh, server)
+
+
+@mcp.tool()
+def check_updates(server: str, security_only: bool = False) -> dict:
+    """Check for available apt package updates. Set security_only=True to filter security updates only."""
+    _ensure_connected(server)
+    return check_updates_impl(_ssh, server, security_only=security_only)
+
+
+@mcp.tool()
+def firewall_status(server: str) -> dict:
+    """Get UFW firewall status, default policies, and rules."""
+    _ensure_connected(server)
+    return firewall_status_impl(_ssh, server)
+
+
+@mcp.tool()
+def security_audit(server: str) -> dict:
+    """Run a comprehensive security audit: SSH config, auto-updates, failed logins, root users, world-writable files."""
+    _ensure_connected(server)
+    return security_audit_impl(_ssh, server)
