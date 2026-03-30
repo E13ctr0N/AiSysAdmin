@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from agensysadmin.ssh_manager import SSHManager
 
+VALID_COMPOSE_ACTIONS = {"up", "down", "restart", "stop", "start", "ps", "logs", "pull", "build"}
+
 
 def docker_ps_impl(
     ssh: SSHManager,
@@ -56,5 +58,29 @@ def docker_logs_impl(
         "logs": result.stdout,
         "stderr": result.stderr,
         "container": container,
+        "duration_ms": result.duration_ms,
+    }
+
+
+def docker_compose_impl(
+    ssh: SSHManager,
+    server: str,
+    action: str,
+    path: str,
+) -> dict:
+    if action not in VALID_COMPOSE_ACTIONS:
+        raise ValueError(
+            f"Invalid action '{action}'. Must be one of: {sorted(VALID_COMPOSE_ACTIONS)}"
+        )
+    action_cmd = f"{action} -d" if action == "up" else action
+    cmd = f"cd {path} && docker compose {action_cmd}"
+    result = ssh.execute(server, cmd, timeout=120)
+    return {
+        "success": result.exit_code == 0,
+        "exit_code": result.exit_code,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+        "action": action,
+        "path": path,
         "duration_ms": result.duration_ms,
     }

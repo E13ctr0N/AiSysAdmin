@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import MagicMock
 from agensysadmin.ssh_manager import SSHManager, CommandResult
-from agensysadmin.tools.docker import docker_ps_impl, docker_logs_impl
+from agensysadmin.tools.docker import docker_ps_impl, docker_logs_impl, docker_compose_impl
 
 
 @pytest.fixture
@@ -77,4 +77,51 @@ class TestDockerLogs:
             exit_code=1, duration_ms=20,
         )
         result = docker_logs_impl(mock_ssh, "prod", container="missing")
+        assert result["success"] is False
+
+
+class TestDockerCompose:
+    def test_compose_up(self, mock_ssh):
+        mock_ssh.execute.return_value = CommandResult(
+            stdout="Creating network app_default\nCreating app_web_1\n",
+            stderr="", exit_code=0, duration_ms=5000,
+        )
+        result = docker_compose_impl(mock_ssh, "prod", action="up", path="/opt/app")
+        assert result["success"] is True
+        cmd = mock_ssh.execute.call_args.args[1]
+        assert "docker compose" in cmd
+        assert "up -d" in cmd
+
+    def test_compose_down(self, mock_ssh):
+        mock_ssh.execute.return_value = CommandResult(
+            stdout="Stopping app_web_1\n", stderr="", exit_code=0, duration_ms=3000,
+        )
+        result = docker_compose_impl(mock_ssh, "prod", action="down", path="/opt/app")
+        assert result["success"] is True
+        assert "down" in mock_ssh.execute.call_args.args[1]
+
+    def test_compose_restart(self, mock_ssh):
+        mock_ssh.execute.return_value = CommandResult(
+            stdout="Restarting\n", stderr="", exit_code=0, duration_ms=2000,
+        )
+        result = docker_compose_impl(mock_ssh, "prod", action="restart", path="/opt/app")
+        assert "restart" in mock_ssh.execute.call_args.args[1]
+
+    def test_compose_ps(self, mock_ssh):
+        mock_ssh.execute.return_value = CommandResult(
+            stdout="NAME  IMAGE  SERVICE  STATUS\n", stderr="", exit_code=0, duration_ms=500,
+        )
+        result = docker_compose_impl(mock_ssh, "prod", action="ps", path="/opt/app")
+        assert result["success"] is True
+
+    def test_compose_invalid_action(self, mock_ssh):
+        with pytest.raises(ValueError, match="Invalid action"):
+            docker_compose_impl(mock_ssh, "prod", action="destroy", path="/opt/app")
+
+    def test_compose_failure(self, mock_ssh):
+        mock_ssh.execute.return_value = CommandResult(
+            stdout="", stderr="no configuration file provided\n",
+            exit_code=1, duration_ms=100,
+        )
+        result = docker_compose_impl(mock_ssh, "prod", action="up", path="/opt/missing")
         assert result["success"] is False
