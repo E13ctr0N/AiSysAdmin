@@ -38,3 +38,23 @@ def docker_ps_impl(
         "success": True,
         "containers": containers,
     }
+
+
+def docker_logs_impl(
+    ssh: SSHManager,
+    server: str,
+    container: str,
+    tail: int | None = None,
+) -> dict:
+    cmd = f"docker logs {container}"
+    if tail is not None:
+        cmd += f" --tail {tail}"
+    result = ssh.execute(server, cmd)
+    return {
+        "success": result.exit_code == 0,
+        "exit_code": result.exit_code,
+        "logs": result.stdout,
+        "stderr": result.stderr,
+        "container": container,
+        "duration_ms": result.duration_ms,
+    }

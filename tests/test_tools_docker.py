@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import MagicMock
 from agensysadmin.ssh_manager import SSHManager, CommandResult
-from agensysadmin.tools.docker import docker_ps_impl
+from agensysadmin.tools.docker import docker_ps_impl, docker_logs_impl
 
 
 @pytest.fixture
@@ -49,4 +49,32 @@ class TestDockerPs:
         )
 
         result = docker_ps_impl(mock_ssh, "prod")
+        assert result["success"] is False
+
+
+class TestDockerLogs:
+    def test_docker_logs_default(self, mock_ssh):
+        mock_ssh.execute.return_value = CommandResult(
+            stdout="2026-03-31 10:00:00 [info] Starting nginx\n2026-03-31 10:00:01 [info] Ready\n",
+            stderr="", exit_code=0, duration_ms=50,
+        )
+        result = docker_logs_impl(mock_ssh, "prod", container="web")
+        assert result["success"] is True
+        assert "Starting nginx" in result["logs"]
+        assert "docker logs" in mock_ssh.execute.call_args.args[1]
+        assert "web" in mock_ssh.execute.call_args.args[1]
+
+    def test_docker_logs_with_tail(self, mock_ssh):
+        mock_ssh.execute.return_value = CommandResult(
+            stdout="last line\n", stderr="", exit_code=0, duration_ms=50,
+        )
+        result = docker_logs_impl(mock_ssh, "prod", container="web", tail=10)
+        assert "--tail 10" in mock_ssh.execute.call_args.args[1]
+
+    def test_docker_logs_container_not_found(self, mock_ssh):
+        mock_ssh.execute.return_value = CommandResult(
+            stdout="", stderr="Error: No such container: missing\n",
+            exit_code=1, duration_ms=20,
+        )
+        result = docker_logs_impl(mock_ssh, "prod", container="missing")
         assert result["success"] is False
