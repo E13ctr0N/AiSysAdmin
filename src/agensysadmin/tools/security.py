@@ -687,3 +687,32 @@ def security_audit_impl(ssh: SSHManager, server: str) -> dict:
             "world_writable": {"files": ww_files},
         },
     }
+
+
+def full_security_audit_impl(ssh: SSHManager, server: str) -> dict:
+    hostname = ssh.execute(server, "hostname").stdout.strip() or server
+    ip = ssh.execute(server, "hostname -I 2>/dev/null | awk '{print $1}'").stdout.strip() or "unknown"
+
+    categories = {
+        "ssh":        {"weight": 15, "findings": _audit_ssh(ssh, server)},
+        "firewall":   {"weight": 15, "findings": _audit_firewall(ssh, server)},
+        "users":      {"weight": 15, "findings": _audit_users(ssh, server)},
+        "network":    {"weight": 10, "findings": _audit_network(ssh, server)},
+        "filesystem": {"weight": 10, "findings": _audit_filesystem(ssh, server)},
+        "services":   {"weight":  5, "findings": _audit_services(ssh, server)},
+        "updates":    {"weight": 10, "findings": _audit_updates(ssh, server)},
+        "logs":       {"weight":  5, "findings": _audit_logs(ssh, server)},
+        "kernel":     {"weight": 10, "findings": _audit_kernel(ssh, server)},
+        "malware":    {"weight":  5, "findings": _audit_malware(ssh, server)},
+    }
+
+    scores = _compute_scores(categories)
+    report = _format_report(hostname, ip, scores, categories)
+
+    return {
+        "score": scores["score"],
+        "grade": scores["grade"],
+        "summary": scores["summary"],
+        "categories": scores["categories"],
+        "report_markdown": report,
+    }

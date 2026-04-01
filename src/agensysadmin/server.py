@@ -28,6 +28,7 @@ from agensysadmin.tools.management import (
 from agensysadmin.tools.security import (
     check_updates_impl,
     firewall_status_impl,
+    full_security_audit_impl,
     security_audit_impl,
 )
 from agensysadmin.tools.backup import (
@@ -187,6 +188,13 @@ def security_audit(server: str) -> dict:
     """Run a comprehensive security audit: SSH config, auto-updates, failed logins, root users, world-writable files."""
     _ensure_connected(server)
     return security_audit_impl(_ssh, server)
+
+
+@mcp.tool()
+def full_security_audit(server: str) -> dict:
+    """Run a comprehensive security audit with scoring: SSH, firewall, users, network, filesystem, services, updates, logs, kernel, malware. Returns score, grade, findings, and markdown report."""
+    _ensure_connected(server)
+    return full_security_audit_impl(_ssh, server)
 
 
 @mcp.tool()
