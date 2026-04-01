@@ -5,6 +5,8 @@ from agensysadmin.tools.security import (
     check_updates_impl,
     firewall_status_impl,
     security_audit_impl,
+    _audit_firewall,
+    _audit_network,
     _compute_scores,
     _format_report,
     _make_finding,
@@ -216,3 +218,28 @@ class TestFormatReport:
         assert "Root login" in report
         assert "## Recommendations" in report
         assert "[CRITICAL]" in report
+
+
+class TestAuditFirewall:
+    def test_ufw_active_deny_incoming(self, mock_ssh):
+        mock_ssh.execute.side_effect = [
+            CommandResult(stdout="/usr/sbin/ufw\n", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(
+                stdout="Status: active\nDefault: deny (incoming), allow (outgoing)\n\nTo Action From\n-- ------ ----\n22/tcp ALLOW IN Anywhere\n",
+                stderr="", exit_code=0, duration_ms=10,
+            ),
+        ]
+        findings = _audit_firewall(mock_ssh, "prod")
+        statuses = {f["check"]: f["status"] for f in findings}
+        assert statuses["Firewall installed and active"] == "PASS"
+        assert statuses["Default INPUT policy"] == "PASS"
+
+    def test_no_firewall(self, mock_ssh):
+        mock_ssh.execute.side_effect = [
+            CommandResult(stdout="", stderr="", exit_code=1, duration_ms=10),
+            CommandResult(stdout="", stderr="", exit_code=1, duration_ms=10),
+            CommandResult(stdout="", stderr="", exit_code=1, duration_ms=10),
+        ]
+        findings = _audit_firewall(mock_ssh, "prod")
+        statuses = {f["check"]: f["severity"] for f in findings}
+        assert statuses["Firewall installed and active"] == "critical"

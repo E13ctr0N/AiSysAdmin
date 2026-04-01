@@ -138,6 +138,97 @@ def _format_report(
     return "\n".join(lines)
 
 
+def _audit_firewall(ssh: SSHManager, server: str) -> list[dict]:
+    findings = []
+
+    fw_type = None
+    for cmd, name in [("which ufw", "ufw"), ("which iptables", "iptables"), ("which nft", "nft")]:
+        r = ssh.execute(server, cmd)
+        if r.exit_code == 0 and r.stdout.strip():
+            fw_type = name
+            break
+
+    if not fw_type:
+        findings.append(_make_finding("critical", "Firewall installed and active", "FAIL", "No firewall found (ufw/iptables/nft)", "Install and configure ufw: apt install ufw && ufw enable"))
+        findings.append(_make_finding("critical", "Default INPUT policy", "FAIL", "No firewall", "Configure default deny incoming"))
+        findings.append(_make_finding("info", "Firewall rules", "INFO", "No firewall installed", ""))
+        return findings
+
+    if fw_type == "ufw":
+        r = ssh.execute(server, "sudo ufw status verbose")
+        output = r.stdout.strip()
+        active = "Status: active" in output
+
+        if not active:
+            findings.append(_make_finding("critical", "Firewall installed and active", "FAIL", "ufw installed but inactive", "Enable ufw: sudo ufw enable"))
+        else:
+            findings.append(_make_finding("pass", "Firewall installed and active", "PASS", "ufw active", ""))
+
+        if "deny (incoming)" in output or "reject (incoming)" in output:
+            findings.append(_make_finding("pass", "Default INPUT policy", "PASS", "Default deny/reject incoming", ""))
+        else:
+            findings.append(_make_finding("critical", "Default INPUT policy", "FAIL", "Default incoming is not deny/reject", "Set default deny: sudo ufw default deny incoming"))
+
+        rule_lines = [l for l in output.split("\n") if l.strip() and not l.startswith(("Status:", "Default:", "New", "Logging", "To", "--", ""))]
+        findings.append(_make_finding("info", "Firewall rules", "INFO", f"{len(rule_lines)} rules configured", ""))
+
+    else:
+        if fw_type == "iptables":
+            r = ssh.execute(server, "sudo iptables -L INPUT -n 2>/dev/null | tail -n +3")
+        else:
+            r = ssh.execute(server, "sudo nft list ruleset 2>/dev/null")
+
+        has_rules = bool(r.stdout.strip())
+        if has_rules:
+            findings.append(_make_finding("pass", "Firewall installed and active", "PASS", f"{fw_type} with rules", ""))
+        else:
+            findings.append(_make_finding("critical", "Firewall installed and active", "FAIL", f"{fw_type} installed but no rules", f"Configure {fw_type} rules"))
+
+        if fw_type == "iptables":
+            r = ssh.execute(server, "sudo iptables -L INPUT -n 2>/dev/null | head -1")
+            if "DROP" in r.stdout or "REJECT" in r.stdout:
+                findings.append(_make_finding("pass", "Default INPUT policy", "PASS", "INPUT policy DROP/REJECT", ""))
+            else:
+                findings.append(_make_finding("critical", "Default INPUT policy", "FAIL", r.stdout.strip(), "Set INPUT policy to DROP"))
+        else:
+            findings.append(_make_finding("info", "Default INPUT policy", "INFO", "nft — check manually", ""))
+
+        findings.append(_make_finding("info", "Firewall rules", "INFO", f"{fw_type} active", ""))
+
+    return findings
+
+
+def _audit_network(ssh: SSHManager, server: str) -> list[dict]:
+    findings = []
+
+    r = ssh.execute(server, "sudo ss -tlnp 2>/dev/null || sudo netstat -tlnp 2>/dev/null")
+    lines = [l for l in r.stdout.strip().split("\n") if l.strip() and "LISTEN" in l]
+    port_details = []
+    for l in lines:
+        parts = l.split()
+        for p in parts:
+            if "0.0.0.0:" in p or ":::" in p:
+                port_details.append(p)
+                break
+    findings.append(_make_finding("info", "Listening ports", "INFO", f"{len(lines)} ports listening: {', '.join(port_details[:10])}", "Review and close unnecessary ports"))
+
+    r = ssh.execute(server, "ss -tnp state established 2>/dev/null | grep -v '127.0.0.1' | tail -n +2")
+    outbound = [l for l in r.stdout.strip().split("\n") if l.strip()]
+    if outbound:
+        findings.append(_make_finding("warning", "Outbound connections", "WARN", f"{len(outbound)} established outbound connections", "Review outbound connections for suspicious activity"))
+    else:
+        findings.append(_make_finding("pass", "Outbound connections", "PASS", "No outbound connections", ""))
+
+    r = ssh.execute(server, "cat /sys/module/ipv6/parameters/disable 2>/dev/null || echo 0")
+    disabled = r.stdout.strip()
+    if disabled == "1":
+        findings.append(_make_finding("pass", "IPv6 status", "PASS", "IPv6 disabled", ""))
+    else:
+        findings.append(_make_finding("info", "IPv6 status", "INFO", "IPv6 enabled", "Disable IPv6 if not needed: net.ipv6.conf.all.disable_ipv6=1"))
+
+    return findings
+
+
 def check_updates_impl(
     ssh: SSHManager,
     server: str,
