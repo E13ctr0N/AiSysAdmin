@@ -315,6 +315,171 @@ def _audit_network(ssh: SSHManager, server: str) -> list[dict]:
     return findings
 
 
+_KNOWN_SUID = {
+    "/usr/bin/passwd", "/usr/bin/sudo", "/usr/bin/chfn", "/usr/bin/chsh",
+    "/usr/bin/gpasswd", "/usr/bin/newgrp", "/usr/bin/su", "/usr/bin/mount",
+    "/usr/bin/umount", "/usr/bin/pkexec", "/usr/bin/crontab",
+    "/usr/lib/dbus-1.0/dbus-daemon-launch-helper",
+    "/usr/lib/openssh/ssh-keysign",
+    "/usr/sbin/unix_chkpwd", "/usr/sbin/pam_extrausers_chkpwd",
+    "/usr/bin/expiry", "/usr/bin/wall", "/usr/bin/ssh-agent",
+    "/usr/bin/dotlockfile", "/usr/lib/x86_64-linux-gnu/utempter/utempter",
+}
+
+
+def _audit_filesystem(ssh: SSHManager, server: str) -> list[dict]:
+    findings = []
+
+    r = ssh.execute(server, "find / -perm /6000 -type f 2>/dev/null | head -50", timeout=60)
+    suid_files = [f for f in r.stdout.strip().split("\n") if f.strip()]
+    unknown_suid = [f for f in suid_files if f not in _KNOWN_SUID]
+    if unknown_suid:
+        findings.append(_make_finding("warning", "SUID/SGID binaries", "WARN", f"{len(unknown_suid)} non-standard: {', '.join(unknown_suid[:5])}", "Review and remove unnecessary SUID/SGID bits: chmod -s <file>"))
+    else:
+        findings.append(_make_finding("pass", "SUID/SGID binaries", "PASS", f"{len(suid_files)} standard SUID/SGID binaries", ""))
+
+    r = ssh.execute(server, "find / -path /tmp -prune -o -path /var/tmp -prune -o -path /proc -prune -o -path /sys -prune -o -type f -perm -o+w -print 2>/dev/null | head -20", timeout=60)
+    ww_files = [f for f in r.stdout.strip().split("\n") if f.strip()]
+    if ww_files:
+        findings.append(_make_finding("warning", "World-writable files", "WARN", f"{len(ww_files)} files: {', '.join(ww_files[:5])}", "Remove world-writable permissions: chmod o-w <file>"))
+    else:
+        findings.append(_make_finding("pass", "World-writable files", "PASS", "No world-writable files outside /tmp", ""))
+
+    r = ssh.execute(server, "mount | grep ' /tmp '")
+    if r.stdout.strip():
+        mount_opts = r.stdout.strip()
+        has_noexec = "noexec" in mount_opts
+        has_nosuid = "nosuid" in mount_opts
+        if has_noexec and has_nosuid:
+            findings.append(_make_finding("pass", "/tmp mount options", "PASS", "noexec,nosuid on /tmp", ""))
+        else:
+            missing = []
+            if not has_noexec:
+                missing.append("noexec")
+            if not has_nosuid:
+                missing.append("nosuid")
+            findings.append(_make_finding("warning", "/tmp mount options", "WARN", f"/tmp missing: {','.join(missing)}", f"Add {','.join(missing)} to /tmp in /etc/fstab"))
+    else:
+        findings.append(_make_finding("warning", "/tmp mount options", "WARN", "/tmp not a separate mount", "Mount /tmp as separate partition with noexec,nosuid"))
+
+    r = ssh.execute(server, "ls -la /etc/shadow /etc/passwd /etc/ssh 2>/dev/null")
+    output = r.stdout.strip()
+    bad_perms = False
+    if output:
+        for line in output.split("\n"):
+            if "/etc/shadow" in line and (line[7] != "-" or line[8] != "-" or line[9] != "-"):
+                bad_perms = True
+            if "/etc/ssh" in line and line[7] != "-":
+                bad_perms = True
+    if bad_perms:
+        findings.append(_make_finding("critical", "Sensitive file permissions", "FAIL", "Insecure permissions detected", "Fix: chmod 640 /etc/shadow; chmod 700 /etc/ssh"))
+    else:
+        findings.append(_make_finding("pass", "Sensitive file permissions", "PASS", "Correct permissions on sensitive files", ""))
+
+    return findings
+
+
+_UNNECESSARY_SERVICES = {
+    "avahi-daemon", "cups", "cups-browsed", "rpcbind", "rpc.mountd",
+    "rpc.statd", "bluetooth", "ModemManager", "whoopsie",
+}
+
+
+def _audit_services(ssh: SSHManager, server: str) -> list[dict]:
+    findings = []
+
+    r = ssh.execute(server, "systemctl list-units --type=service --state=running --no-legend --no-pager 2>/dev/null | awk '{print $1}'")
+    services = [s for s in r.stdout.strip().split("\n") if s.strip()]
+    findings.append(_make_finding("info", "Running daemons", "INFO", f"{len(services)} services running", ""))
+
+    r = ssh.execute(server, "systemctl list-units --type=service --state=running --no-legend --no-pager 2>/dev/null | awk '{print $1}'")
+    running = {s.replace(".service", "") for s in r.stdout.strip().split("\n") if s.strip()}
+    found_unnecessary = running & _UNNECESSARY_SERVICES
+    if found_unnecessary:
+        findings.append(_make_finding("warning", "Unnecessary services", "WARN", f"Running: {', '.join(sorted(found_unnecessary))}", f"Disable with: systemctl disable --now {' '.join(sorted(found_unnecessary))}"))
+    else:
+        findings.append(_make_finding("pass", "Unnecessary services", "PASS", "No unnecessary services detected", ""))
+
+    r = ssh.execute(server, "which xinetd inetd 2>/dev/null")
+    if r.stdout.strip():
+        findings.append(_make_finding("warning", "Legacy inetd/xinetd", "WARN", f"Found: {r.stdout.strip()}", "Remove legacy inetd/xinetd: apt remove xinetd"))
+    else:
+        findings.append(_make_finding("pass", "Legacy inetd/xinetd", "PASS", "No inetd/xinetd found", ""))
+
+    return findings
+
+
+def _audit_updates(ssh: SSHManager, server: str) -> list[dict]:
+    findings = []
+
+    ssh.execute(server, "sudo apt-get update -qq 2>/dev/null", timeout=60)
+
+    r = ssh.execute(server, "apt list --upgradable 2>/dev/null")
+    pkg_lines = [l for l in r.stdout.strip().split("\n") if l.strip() and not l.startswith("Listing")]
+    if pkg_lines:
+        findings.append(_make_finding("warning", "Pending updates", "WARN", f"{len(pkg_lines)} packages need updating", "Run: sudo apt upgrade"))
+    else:
+        findings.append(_make_finding("pass", "Pending updates", "PASS", "All packages up to date", ""))
+
+    r = ssh.execute(server, "apt list --upgradable 2>/dev/null | grep -i security")
+    sec_lines = [l for l in r.stdout.strip().split("\n") if l.strip() and not l.startswith("Listing")]
+    if sec_lines:
+        findings.append(_make_finding("critical", "Security updates", "FAIL", f"{len(sec_lines)} security updates pending", "Run immediately: sudo apt upgrade"))
+    else:
+        findings.append(_make_finding("pass", "Security updates", "PASS", "No pending security updates", ""))
+
+    r = ssh.execute(server, "uname -r | sed 's/-[a-z].*//'; apt-cache policy linux-image-$(dpkg --print-architecture) 2>/dev/null | grep Candidate | awk '{print $2}' | sed 's/-[a-z].*//'")
+    versions = [v.strip() for v in r.stdout.strip().split("\n") if v.strip()]
+    if len(versions) >= 2 and versions[0] != versions[1]:
+        findings.append(_make_finding("warning", "Kernel version", "WARN", f"Running {versions[0]}, available {versions[1]}", "Update kernel and reboot"))
+    else:
+        current = versions[0] if versions else "unknown"
+        findings.append(_make_finding("pass", "Kernel version", "PASS", f"Kernel {current} is current", ""))
+
+    r = ssh.execute(server, "ls /etc/apt/apt.conf.d/20auto-upgrades 2>/dev/null")
+    if r.exit_code == 0 and r.stdout.strip():
+        findings.append(_make_finding("pass", "Unattended upgrades", "PASS", "Auto-upgrades configured", ""))
+    else:
+        findings.append(_make_finding("warning", "Unattended upgrades", "WARN", "Unattended-upgrades not configured", "Install: apt install unattended-upgrades && dpkg-reconfigure unattended-upgrades"))
+
+    return findings
+
+
+def _audit_logs(ssh: SSHManager, server: str) -> list[dict]:
+    findings = []
+
+    r = ssh.execute(server, "systemctl is-active fail2ban 2>/dev/null")
+    if r.stdout.strip() == "active":
+        findings.append(_make_finding("pass", "fail2ban", "PASS", "fail2ban active", ""))
+    else:
+        findings.append(_make_finding("warning", "fail2ban", "WARN", "fail2ban not active", "Install: apt install fail2ban && systemctl enable --now fail2ban"))
+
+    r = ssh.execute(server, "systemctl is-active auditd 2>/dev/null")
+    if r.stdout.strip() == "active":
+        findings.append(_make_finding("pass", "auditd", "PASS", "auditd active", ""))
+    else:
+        findings.append(_make_finding("info", "auditd", "INFO", "auditd not active", "Consider installing: apt install auditd"))
+
+    r = ssh.execute(server, "ls /etc/logrotate.conf 2>/dev/null")
+    if r.exit_code == 0 and r.stdout.strip():
+        findings.append(_make_finding("pass", "Logrotate", "PASS", "Logrotate configured", ""))
+    else:
+        findings.append(_make_finding("info", "Logrotate", "INFO", "Logrotate not found", "Install: apt install logrotate"))
+
+    r = ssh.execute(server, "sudo grep -c 'Failed password' /var/log/auth.log 2>/dev/null || echo 0")
+    try:
+        count = int(r.stdout.strip())
+    except ValueError:
+        count = 0
+    findings.append(_make_finding("info", "Failed login attempts", "INFO", f"{count} failed login attempts in auth.log", ""))
+
+    r = ssh.execute(server, "sudo grep 'COMMAND=' /var/log/auth.log 2>/dev/null | tail -10")
+    lines = [l for l in r.stdout.strip().split("\n") if l.strip()]
+    findings.append(_make_finding("info", "Recent sudo activity", "INFO", f"{len(lines)} recent sudo commands", ""))
+
+    return findings
+
+
 def check_updates_impl(
     ssh: SSHManager,
     server: str,

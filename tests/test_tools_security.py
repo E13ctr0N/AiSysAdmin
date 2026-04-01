@@ -8,7 +8,11 @@ from agensysadmin.tools.security import (
     _audit_ssh,
     _audit_firewall,
     _audit_network,
+    _audit_services,
     _audit_users,
+    _audit_filesystem,
+    _audit_logs,
+    _audit_updates,
     _compute_scores,
     _format_report,
     _make_finding,
@@ -342,3 +346,127 @@ class TestAuditUsers:
         assert statuses["Empty passwords"] == "critical"
         assert statuses["Inactive accounts"] == "warning"
         assert statuses["NOPASSWD in sudoers"] == "warning"
+
+
+class TestAuditFilesystem:
+    def test_secure_filesystem(self, mock_ssh):
+        mock_ssh.execute.side_effect = [
+            CommandResult(stdout="/usr/bin/passwd\n/usr/bin/sudo\n/usr/bin/chfn\n", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="/dev/sda2 on /tmp type ext4 (rw,nosuid,noexec)\n", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="-rw-r----- 1 root shadow 1234 Jan 1 00:00 /etc/shadow\n-rw-r--r-- 1 root root 2345 Jan 1 00:00 /etc/passwd\ndrwx------ 2 root root 4096 Jan 1 00:00 /etc/ssh\n", stderr="", exit_code=0, duration_ms=10),
+        ]
+        findings = _audit_filesystem(mock_ssh, "prod")
+        statuses = {f["check"]: f["status"] for f in findings}
+        assert statuses["SUID/SGID binaries"] == "PASS"
+        assert statuses["World-writable files"] == "PASS"
+        assert statuses["/tmp mount options"] == "PASS"
+        assert statuses["Sensitive file permissions"] == "PASS"
+
+    def test_insecure_filesystem(self, mock_ssh):
+        mock_ssh.execute.side_effect = [
+            CommandResult(stdout="/usr/bin/passwd\n/usr/bin/sudo\n/opt/evil/backdoor\n", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="/etc/crontab\n/var/www/config.php\n", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="/dev/sda2 on /tmp type ext4 (rw,relatime)\n", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="-rw-rw-rw- 1 root shadow 1234 Jan 1 00:00 /etc/shadow\n", stderr="", exit_code=0, duration_ms=10),
+        ]
+        findings = _audit_filesystem(mock_ssh, "prod")
+        statuses = {f["check"]: f["severity"] for f in findings}
+        assert statuses["SUID/SGID binaries"] == "warning"
+        assert statuses["World-writable files"] == "warning"
+        assert statuses["/tmp mount options"] == "warning"
+        assert statuses["Sensitive file permissions"] == "critical"
+
+
+class TestAuditServices:
+    def test_minimal_services(self, mock_ssh):
+        mock_ssh.execute.side_effect = [
+            CommandResult(stdout="ssh.service\nsystemd-journald.service\n", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="ssh.service\nsystemd-journald.service\n", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="", stderr="", exit_code=1, duration_ms=10),
+        ]
+        findings = _audit_services(mock_ssh, "prod")
+        statuses = {f["check"]: f["status"] for f in findings}
+        assert statuses["Running daemons"] == "INFO"
+        assert statuses["Unnecessary services"] == "PASS"
+        assert statuses["Legacy inetd/xinetd"] == "PASS"
+
+    def test_bloated_services(self, mock_ssh):
+        mock_ssh.execute.side_effect = [
+            CommandResult(stdout="ssh.service\navahi-daemon.service\ncups.service\nrpcbind.service\n", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="ssh.service\navahi-daemon.service\ncups.service\nrpcbind.service\n", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="/usr/sbin/xinetd\n", stderr="", exit_code=0, duration_ms=10),
+        ]
+        findings = _audit_services(mock_ssh, "prod")
+        statuses = {f["check"]: f["severity"] for f in findings}
+        assert statuses["Unnecessary services"] == "warning"
+        assert statuses["Legacy inetd/xinetd"] == "warning"
+
+
+class TestAuditUpdates:
+    def test_up_to_date(self, mock_ssh):
+        mock_ssh.execute.side_effect = [
+            CommandResult(stdout="", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="Listing...\n", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="Listing...\n", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="5.15.0-91\n5.15.0-91\n", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="/etc/apt/apt.conf.d/20auto-upgrades\n", stderr="", exit_code=0, duration_ms=10),
+        ]
+        findings = _audit_updates(mock_ssh, "prod")
+        statuses = {f["check"]: f["status"] for f in findings}
+        assert statuses["Pending updates"] == "PASS"
+        assert statuses["Security updates"] == "PASS"
+        assert statuses["Kernel version"] == "PASS"
+        assert statuses["Unattended upgrades"] == "PASS"
+
+    def test_outdated_system(self, mock_ssh):
+        mock_ssh.execute.side_effect = [
+            CommandResult(stdout="", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(
+                stdout="Listing...\nlibssl3/jammy-updates 3.0.2 amd64\ncurl/jammy-updates 7.81 amd64\n",
+                stderr="", exit_code=0, duration_ms=10,
+            ),
+            CommandResult(
+                stdout="Listing...\nlibssl3/jammy-security 3.0.2 amd64\n",
+                stderr="", exit_code=0, duration_ms=10,
+            ),
+            CommandResult(stdout="5.15.0-88\n5.15.0-91\n", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="", stderr="", exit_code=1, duration_ms=10),
+        ]
+        findings = _audit_updates(mock_ssh, "prod")
+        statuses = {f["check"]: f["severity"] for f in findings}
+        assert statuses["Pending updates"] == "warning"
+        assert statuses["Security updates"] == "critical"
+        assert statuses["Kernel version"] == "warning"
+        assert statuses["Unattended upgrades"] == "warning"
+
+
+class TestAuditLogs:
+    def test_well_configured(self, mock_ssh):
+        mock_ssh.execute.side_effect = [
+            CommandResult(stdout="active\n", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="active\n", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="/etc/logrotate.conf\n", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="42\n", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="Apr 1 root : cmd1\n", stderr="", exit_code=0, duration_ms=10),
+        ]
+        findings = _audit_logs(mock_ssh, "prod")
+        statuses = {f["check"]: f["status"] for f in findings}
+        assert statuses["fail2ban"] == "PASS"
+        assert statuses["auditd"] == "PASS"
+        assert statuses["Logrotate"] == "PASS"
+        assert statuses["Failed login attempts"] == "INFO"
+        assert statuses["Recent sudo activity"] == "INFO"
+
+    def test_no_security_tools(self, mock_ssh):
+        mock_ssh.execute.side_effect = [
+            CommandResult(stdout="", stderr="", exit_code=3, duration_ms=10),
+            CommandResult(stdout="", stderr="", exit_code=4, duration_ms=10),
+            CommandResult(stdout="/etc/logrotate.conf\n", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="0\n", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="", stderr="", exit_code=0, duration_ms=10),
+        ]
+        findings = _audit_logs(mock_ssh, "prod")
+        statuses = {f["check"]: f["severity"] for f in findings}
+        assert statuses["fail2ban"] == "warning"
+        assert statuses["auditd"] == "info"
