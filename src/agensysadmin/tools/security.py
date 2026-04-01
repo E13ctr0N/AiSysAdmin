@@ -1,8 +1,141 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime, timezone
 
 from agensysadmin.ssh_manager import SSHManager
+
+
+def _make_finding(
+    severity: str, check: str, status: str, detail: str, recommendation: str
+) -> dict:
+    return {
+        "severity": severity,
+        "check": check,
+        "status": status,
+        "detail": detail,
+        "recommendation": recommendation,
+    }
+
+
+def _compute_scores(categories: dict) -> dict:
+    summary = {"critical": 0, "warning": 0, "info": 0, "pass": 0}
+    cat_scores = {}
+    total_weight = 0
+
+    for name, cat in categories.items():
+        findings = cat["findings"]
+        weight = cat["weight"]
+        total_weight += weight
+
+        has_critical = False
+        pass_count = 0
+        total_count = 0
+
+        for f in findings:
+            sev = f["severity"]
+            summary[sev] = summary.get(sev, 0) + 1
+            if sev == "critical":
+                has_critical = True
+            if sev == "pass":
+                pass_count += 1
+            total_count += 1
+
+        if has_critical:
+            cat_score = 0
+        elif total_count == 0:
+            cat_score = 100
+        else:
+            cat_score = int(pass_count / total_count * 100)
+
+        cat_scores[name] = {"score": cat_score, "findings": findings}
+
+    if total_weight == 0:
+        overall = 0
+    else:
+        overall = int(
+            sum(
+                cat_scores[n]["score"] * categories[n]["weight"]
+                for n in categories
+            )
+            / total_weight
+        )
+
+    if overall >= 90:
+        grade = "A"
+    elif overall >= 70:
+        grade = "B"
+    elif overall >= 50:
+        grade = "C"
+    elif overall >= 30:
+        grade = "D"
+    else:
+        grade = "F"
+
+    return {
+        "score": overall,
+        "grade": grade,
+        "summary": summary,
+        "categories": cat_scores,
+    }
+
+
+def _format_report(
+    hostname: str, ip: str, scores: dict, categories: dict
+) -> str:
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    lines = [
+        "# Security Audit Report",
+        f"**Server:** {hostname} ({ip})",
+        f"**Date:** {timestamp}",
+        f"**Score:** {scores['score']}/100 (Grade: {scores['grade']})",
+        "",
+        "## Summary",
+        f"- Critical: {scores['summary']['critical']}",
+        f"- Warning: {scores['summary']['warning']}",
+        f"- Info: {scores['summary']['info']}",
+        f"- Pass: {scores['summary']['pass']}",
+        "",
+    ]
+
+    category_titles = {
+        "ssh": "SSH",
+        "firewall": "Firewall",
+        "users": "Users & Auth",
+        "network": "Network",
+        "filesystem": "Filesystem",
+        "services": "Services",
+        "updates": "Updates",
+        "logs": "Logs & Audit",
+        "kernel": "Kernel & Sysctl",
+        "malware": "Malware/Rootkit",
+    }
+
+    recommendations = []
+
+    for name, cat in categories.items():
+        cat_score = scores["categories"][name]["score"]
+        title = category_titles.get(name, name.title())
+        lines.append(f"## {title} (score: {cat_score}/100)")
+        lines.append("")
+        lines.append("| Status | Check | Detail |")
+        lines.append("|---|---|---|")
+
+        for f in cat["findings"]:
+            lines.append(f"| {f['status']} | {f['check']} | {f['detail']} |")
+            if f["recommendation"] and f["status"] != "PASS":
+                tag = f["severity"].upper()
+                recommendations.append(f"[{tag}] {f['recommendation']}")
+
+        lines.append("")
+
+    if recommendations:
+        lines.append("## Recommendations")
+        for i, rec in enumerate(recommendations, 1):
+            lines.append(f"{i}. {rec}")
+        lines.append("")
+
+    return "\n".join(lines)
 
 
 def check_updates_impl(

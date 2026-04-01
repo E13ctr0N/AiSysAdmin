@@ -1,7 +1,14 @@
 import pytest
 from unittest.mock import MagicMock
 from agensysadmin.ssh_manager import SSHManager, CommandResult
-from agensysadmin.tools.security import check_updates_impl, firewall_status_impl, security_audit_impl
+from agensysadmin.tools.security import (
+    check_updates_impl,
+    firewall_status_impl,
+    security_audit_impl,
+    _compute_scores,
+    _format_report,
+    _make_finding,
+)
 
 
 @pytest.fixture
@@ -135,3 +142,77 @@ class TestSecurityAudit:
         assert result["checks"]["failed_logins"]["count"] == 1523
         assert "backdoor" in result["checks"]["root_users"]["users"]
         assert len(result["checks"]["world_writable"]["files"]) == 2
+
+
+class TestScoring:
+    def test_make_finding(self):
+        f = _make_finding("critical", "SSH root login", "FAIL", "PermitRootLogin yes", "Set to no")
+        assert f == {
+            "severity": "critical",
+            "check": "SSH root login",
+            "status": "FAIL",
+            "detail": "PermitRootLogin yes",
+            "recommendation": "Set to no",
+        }
+
+    def test_all_pass_score_100(self):
+        findings = [
+            _make_finding("pass", "Check A", "PASS", "ok", ""),
+            _make_finding("pass", "Check B", "PASS", "ok", ""),
+        ]
+        categories = {"ssh": {"weight": 100, "findings": findings}}
+        result = _compute_scores(categories)
+        assert result["score"] == 100
+        assert result["grade"] == "A"
+        assert result["summary"]["pass"] == 2
+        assert result["summary"]["critical"] == 0
+
+    def test_critical_zeroes_category(self):
+        findings = [
+            _make_finding("pass", "Check A", "PASS", "ok", ""),
+            _make_finding("critical", "Check B", "FAIL", "bad", "fix"),
+        ]
+        categories = {"ssh": {"weight": 100, "findings": findings}}
+        result = _compute_scores(categories)
+        assert result["score"] == 0
+        assert result["grade"] == "F"
+        assert result["categories"]["ssh"]["score"] == 0
+
+    def test_weighted_average(self):
+        cat_a_findings = [_make_finding("pass", "A", "PASS", "ok", "")]
+        cat_b_findings = [_make_finding("warning", "B", "WARN", "meh", "fix")]
+        categories = {
+            "ssh": {"weight": 50, "findings": cat_a_findings},
+            "firewall": {"weight": 50, "findings": cat_b_findings},
+        }
+        result = _compute_scores(categories)
+        assert result["score"] == 50
+        assert result["grade"] == "C"
+
+    def test_grade_thresholds(self):
+        def score_for(s):
+            f = [_make_finding("pass", "X", "PASS", "", "")] if s == 100 else [_make_finding("warning", "X", "WARN", "", "")]
+            cats = {"x": {"weight": 100, "findings": f}}
+            return _compute_scores(cats)["grade"]
+
+        assert score_for(100) == "A"
+        assert score_for(0) == "F"
+
+
+class TestFormatReport:
+    def test_report_contains_sections(self):
+        findings = [
+            _make_finding("critical", "Root login", "FAIL", "PermitRootLogin yes", "Set to no"),
+            _make_finding("pass", "Pubkey auth", "PASS", "PubkeyAuthentication yes", ""),
+        ]
+        categories = {"ssh": {"weight": 100, "findings": findings}}
+        scores = _compute_scores(categories)
+        report = _format_report("testhost", "1.2.3.4", scores, categories)
+        assert "# Security Audit Report" in report
+        assert "testhost" in report
+        assert "1.2.3.4" in report
+        assert "## SSH" in report
+        assert "FAIL" in report
+        assert "Root login" in report
+        assert "## Recommendations" in report
+        assert "[CRITICAL]" in report
