@@ -513,6 +513,48 @@ def _audit_kernel(ssh: SSHManager, server: str) -> list[dict]:
     return findings
 
 
+def _audit_malware(ssh: SSHManager, server: str) -> list[dict]:
+    findings = []
+
+    r = ssh.execute(server, "for u in $(cut -f1 -d: /etc/passwd); do crontab -l -u $u 2>/dev/null; done; cat /etc/crontab /etc/cron.d/* 2>/dev/null")
+    cron_lines = [l for l in r.stdout.strip().split("\n") if l.strip() and not l.startswith("#")]
+    suspicious_cron = [l for l in cron_lines if any(kw in l.lower() for kw in ["curl", "wget", "bash -c", "/dev/tcp", "base64", "eval", "nc ", "ncat"])]
+    if suspicious_cron:
+        findings.append(_make_finding("warning", "Suspicious crontab entries", "WARN", f"{len(suspicious_cron)} suspicious entries found", "Review crontab entries for malicious commands"))
+    else:
+        findings.append(_make_finding("pass", "Suspicious crontab entries", "PASS", "No suspicious crontab entries", ""))
+
+    r = ssh.execute(server, "ls -la /proc/*/exe 2>/dev/null | grep '(deleted)'")
+    deleted = [l for l in r.stdout.strip().split("\n") if l.strip()]
+    if deleted:
+        findings.append(_make_finding("critical", "Processes without binary", "FAIL", f"{len(deleted)} processes with deleted binaries", "Investigate processes running from deleted binaries"))
+    else:
+        findings.append(_make_finding("pass", "Processes without binary", "PASS", "All processes have on-disk binaries", ""))
+
+    r = ssh.execute(server, "ls -la /tmp/.ice-unix/.x /tmp/.font-unix/.x /dev/shm/.x /usr/lib/libamplify.so /usr/bin/.sshd 2>/dev/null")
+    if r.stdout.strip():
+        findings.append(_make_finding("critical", "Known rootkit paths", "FAIL", f"Found: {r.stdout.strip()}", "Investigate immediately — possible rootkit"))
+    else:
+        findings.append(_make_finding("pass", "Known rootkit paths", "PASS", "No known rootkit files found", ""))
+
+    r = ssh.execute(server, "find /tmp /dev/shm -maxdepth 2 -name '.*' -not -name '.' -not -name '..' -not -name '.ICE-unix' -not -name '.X11-unix' -not -name '.font-unix' -not -name '.XIM-unix' 2>/dev/null")
+    hidden = [f for f in r.stdout.strip().split("\n") if f.strip()]
+    if hidden:
+        findings.append(_make_finding("warning", "Hidden files in /tmp, /dev/shm", "WARN", f"{len(hidden)} hidden files: {', '.join(hidden[:5])}", "Review hidden files in /tmp and /dev/shm"))
+    else:
+        findings.append(_make_finding("pass", "Hidden files in /tmp, /dev/shm", "PASS", "No suspicious hidden files", ""))
+
+    r = ssh.execute(server, "cat /etc/hosts 2>/dev/null")
+    hosts_lines = [l.strip() for l in r.stdout.strip().split("\n") if l.strip() and not l.startswith("#")]
+    suspicious_hosts = [l for l in hosts_lines if not any(kw in l for kw in ["localhost", "ip6-", "ff02::", "fe00::", "127.0.0.1", "::1"])]
+    if suspicious_hosts:
+        findings.append(_make_finding("warning", "Suspicious /etc/hosts entries", "WARN", f"{len(suspicious_hosts)} non-standard entries", "Review /etc/hosts for hijacked domains"))
+    else:
+        findings.append(_make_finding("pass", "Suspicious /etc/hosts entries", "PASS", "Only standard entries in /etc/hosts", ""))
+
+    return findings
+
+
 def check_updates_impl(
     ssh: SSHManager,
     server: str,

