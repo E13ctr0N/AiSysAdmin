@@ -385,7 +385,6 @@ class TestAuditServices:
     def test_minimal_services(self, mock_ssh):
         mock_ssh.execute.side_effect = [
             CommandResult(stdout="ssh.service\nsystemd-journald.service\n", stderr="", exit_code=0, duration_ms=10),
-            CommandResult(stdout="ssh.service\nsystemd-journald.service\n", stderr="", exit_code=0, duration_ms=10),
             CommandResult(stdout="", stderr="", exit_code=1, duration_ms=10),
         ]
         findings = _audit_services(mock_ssh, "prod")
@@ -396,7 +395,6 @@ class TestAuditServices:
 
     def test_bloated_services(self, mock_ssh):
         mock_ssh.execute.side_effect = [
-            CommandResult(stdout="ssh.service\navahi-daemon.service\ncups.service\nrpcbind.service\n", stderr="", exit_code=0, duration_ms=10),
             CommandResult(stdout="ssh.service\navahi-daemon.service\ncups.service\nrpcbind.service\n", stderr="", exit_code=0, duration_ms=10),
             CommandResult(stdout="/usr/sbin/xinetd\n", stderr="", exit_code=0, duration_ms=10),
         ]
@@ -590,9 +588,8 @@ class TestFullSecurityAudit:
             CommandResult(stdout="/dev/sda2 on /tmp type ext4 (rw,nosuid,noexec)\n", stderr="", exit_code=0, duration_ms=10),
             CommandResult(stdout="-rw-r----- 1 root shadow 1234 Jan 1 00:00 /etc/shadow\n", stderr="", exit_code=0, duration_ms=10),
         ]
-        # Services: 3
+        # Services: 2
         svc_r = [
-            CommandResult(stdout="ssh.service\n", stderr="", exit_code=0, duration_ms=10),
             CommandResult(stdout="ssh.service\n", stderr="", exit_code=0, duration_ms=10),
             CommandResult(stdout="", stderr="", exit_code=1, duration_ms=10),
         ]

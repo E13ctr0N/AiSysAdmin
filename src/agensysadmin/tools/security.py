@@ -220,7 +220,7 @@ def _audit_firewall(ssh: SSHManager, server: str) -> list[dict]:
         else:
             findings.append(_make_finding("critical", "Default INPUT policy", "FAIL", "Default incoming is not deny/reject", "Set default deny: sudo ufw default deny incoming"))
 
-        rule_lines = [l for l in output.split("\n") if l.strip() and not l.startswith(("Status:", "Default:", "New", "Logging", "To", "--", ""))]
+        rule_lines = [l for l in output.split("\n") if l.strip() and not l.startswith(("Status:", "Default:", "New", "Logging", "To", "--"))]
         findings.append(_make_finding("info", "Firewall rules", "INFO", f"{len(rule_lines)} rules configured", ""))
 
     else:
@@ -260,14 +260,14 @@ def _audit_users(ssh: SSHManager, server: str) -> list[dict]:
     else:
         findings.append(_make_finding("pass", "Extra UID 0 users", "PASS", "Only root has UID 0", ""))
 
-    r = ssh.execute(server, "sudo awk -F: '($2 == \"\" || $2 == \"!\") && $1 != \"*\" {print $1}' /etc/shadow 2>/dev/null")
+    r = ssh.execute(server, "sudo awk -F: '$2 == \"\" {print $1}' /etc/shadow 2>/dev/null")
     empty_pw = [u for u in r.stdout.strip().split("\n") if u.strip()]
     if empty_pw:
         findings.append(_make_finding("critical", "Empty passwords", "FAIL", f"Accounts without password: {', '.join(empty_pw)}", "Set passwords or lock these accounts: passwd -l <user>"))
     else:
         findings.append(_make_finding("pass", "Empty passwords", "PASS", "No accounts with empty passwords", ""))
 
-    r = ssh.execute(server, "lastlog -b 90 2>/dev/null | tail -n +2 | awk '$2 != \"**Never\" && NF > 1 {print $1}'")
+    r = ssh.execute(server, "lastlog -b 90 2>/dev/null | tail -n +2 | awk 'NF > 1 {print $1}'")
     inactive = [u for u in r.stdout.strip().split("\n") if u.strip()]
     if inactive:
         findings.append(_make_finding("warning", "Inactive accounts", "WARN", f"Inactive >90 days: {', '.join(inactive[:5])}", "Review and disable inactive accounts: usermod -L <user>"))
@@ -298,7 +298,7 @@ def _audit_network(ssh: SSHManager, server: str) -> list[dict]:
                 break
     findings.append(_make_finding("info", "Listening ports", "INFO", f"{len(lines)} ports listening: {', '.join(port_details[:10])}", "Review and close unnecessary ports"))
 
-    r = ssh.execute(server, "ss -tnp state established 2>/dev/null | grep -v '127.0.0.1' | tail -n +2")
+    r = ssh.execute(server, "sudo ss -tnp state established 2>/dev/null | grep -v '127.0.0.1' | grep -v '::1' | tail -n +2")
     outbound = [l for l in r.stdout.strip().split("\n") if l.strip()]
     if outbound:
         findings.append(_make_finding("warning", "Outbound connections", "WARN", f"{len(outbound)} established outbound connections", "Review outbound connections for suspicious activity"))
@@ -392,8 +392,7 @@ def _audit_services(ssh: SSHManager, server: str) -> list[dict]:
     services = [s for s in r.stdout.strip().split("\n") if s.strip()]
     findings.append(_make_finding("info", "Running daemons", "INFO", f"{len(services)} services running", ""))
 
-    r = ssh.execute(server, "systemctl list-units --type=service --state=running --no-legend --no-pager 2>/dev/null | awk '{print $1}'")
-    running = {s.replace(".service", "") for s in r.stdout.strip().split("\n") if s.strip()}
+    running = {s.replace(".service", "") for s in services}
     found_unnecessary = running & _UNNECESSARY_SERVICES
     if found_unnecessary:
         findings.append(_make_finding("warning", "Unnecessary services", "WARN", f"Running: {', '.join(sorted(found_unnecessary))}", f"Disable with: systemctl disable --now {' '.join(sorted(found_unnecessary))}"))
