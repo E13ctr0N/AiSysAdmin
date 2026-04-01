@@ -138,6 +138,57 @@ def _format_report(
     return "\n".join(lines)
 
 
+def _audit_ssh(ssh: SSHManager, server: str) -> list[dict]:
+    findings = []
+
+    r = ssh.execute(server, "sudo grep -i '^PermitRootLogin' /etc/ssh/sshd_config | tail -1")
+    val = r.stdout.strip().split()[-1] if r.stdout.strip() else "yes"
+    if val.lower() == "yes":
+        findings.append(_make_finding("critical", "Root login", "FAIL", f"PermitRootLogin {val}", "Set PermitRootLogin to no in /etc/ssh/sshd_config"))
+    else:
+        findings.append(_make_finding("pass", "Root login", "PASS", f"PermitRootLogin {val}", ""))
+
+    r = ssh.execute(server, "sudo grep -i '^PasswordAuthentication' /etc/ssh/sshd_config | tail -1")
+    val = r.stdout.strip().split()[-1] if r.stdout.strip() else "yes"
+    if val.lower() == "yes":
+        findings.append(_make_finding("warning", "Password authentication", "WARN", f"PasswordAuthentication {val}", "Disable password auth, use SSH keys instead"))
+    else:
+        findings.append(_make_finding("pass", "Password authentication", "PASS", f"PasswordAuthentication {val}", ""))
+
+    r = ssh.execute(server, "sudo grep -i '^PubkeyAuthentication' /etc/ssh/sshd_config | tail -1")
+    val = r.stdout.strip().split()[-1] if r.stdout.strip() else "yes"
+    if val.lower() != "yes":
+        findings.append(_make_finding("warning", "Public key authentication", "WARN", f"PubkeyAuthentication {val}", "Enable PubkeyAuthentication in sshd_config"))
+    else:
+        findings.append(_make_finding("pass", "Public key authentication", "PASS", f"PubkeyAuthentication {val}", ""))
+
+    r = ssh.execute(server, "sudo grep -i '^Port' /etc/ssh/sshd_config | tail -1")
+    val = r.stdout.strip().split()[-1] if r.stdout.strip() else "22"
+    if val == "22":
+        findings.append(_make_finding("info", "SSH port", "INFO", "Port 22 (default)", "Consider changing SSH port to reduce scan noise"))
+    else:
+        findings.append(_make_finding("pass", "SSH port", "PASS", f"Port {val}", ""))
+
+    r = ssh.execute(server, "sudo grep -i '^MaxAuthTries' /etc/ssh/sshd_config | tail -1")
+    val = r.stdout.strip().split()[-1] if r.stdout.strip() else "6"
+    try:
+        max_tries = int(val)
+    except ValueError:
+        max_tries = 6
+    if max_tries > 3:
+        findings.append(_make_finding("warning", "Max auth tries", "WARN", f"MaxAuthTries {max_tries}", "Set MaxAuthTries to 3 or less in sshd_config"))
+    else:
+        findings.append(_make_finding("pass", "Max auth tries", "PASS", f"MaxAuthTries {max_tries}", ""))
+
+    r = ssh.execute(server, "sudo grep -iE '^(AllowUsers|AllowGroups)' /etc/ssh/sshd_config | tail -1")
+    if r.stdout.strip():
+        findings.append(_make_finding("pass", "Access restrictions", "PASS", r.stdout.strip(), ""))
+    else:
+        findings.append(_make_finding("info", "Access restrictions", "INFO", "No AllowUsers/AllowGroups set", "Consider restricting SSH access with AllowUsers or AllowGroups"))
+
+    return findings
+
+
 def _audit_firewall(ssh: SSHManager, server: str) -> list[dict]:
     findings = []
 

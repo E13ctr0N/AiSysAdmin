@@ -5,6 +5,7 @@ from agensysadmin.tools.security import (
     check_updates_impl,
     firewall_status_impl,
     security_audit_impl,
+    _audit_ssh,
     _audit_firewall,
     _audit_network,
     _compute_scores,
@@ -220,6 +221,44 @@ class TestFormatReport:
         assert "[CRITICAL]" in report
 
 
+class TestAuditSSH:
+    def test_secure_ssh_config(self, mock_ssh):
+        mock_ssh.execute.side_effect = [
+            CommandResult(stdout="PermitRootLogin no\n", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="PasswordAuthentication no\n", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="PubkeyAuthentication yes\n", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="Port 2222\n", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="MaxAuthTries 3\n", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="AllowUsers admin deploy\n", stderr="", exit_code=0, duration_ms=10),
+        ]
+        findings = _audit_ssh(mock_ssh, "prod")
+        statuses = {f["check"]: f["status"] for f in findings}
+        assert statuses["Root login"] == "PASS"
+        assert statuses["Password authentication"] == "PASS"
+        assert statuses["Public key authentication"] == "PASS"
+        assert statuses["SSH port"] == "PASS"
+        assert statuses["Max auth tries"] == "PASS"
+        assert statuses["Access restrictions"] == "PASS"
+
+    def test_insecure_ssh_config(self, mock_ssh):
+        mock_ssh.execute.side_effect = [
+            CommandResult(stdout="PermitRootLogin yes\n", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="PasswordAuthentication yes\n", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="PubkeyAuthentication no\n", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="", stderr="", exit_code=1, duration_ms=10),
+            CommandResult(stdout="MaxAuthTries 6\n", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="", stderr="", exit_code=1, duration_ms=10),
+        ]
+        findings = _audit_ssh(mock_ssh, "prod")
+        statuses = {f["check"]: f["severity"] for f in findings}
+        assert statuses["Root login"] == "critical"
+        assert statuses["Password authentication"] == "warning"
+        assert statuses["Public key authentication"] == "warning"
+        assert statuses["SSH port"] == "info"
+        assert statuses["Max auth tries"] == "warning"
+        assert statuses["Access restrictions"] == "info"
+
+
 class TestAuditFirewall:
     def test_ufw_active_deny_incoming(self, mock_ssh):
         mock_ssh.execute.side_effect = [
@@ -243,3 +282,32 @@ class TestAuditFirewall:
         findings = _audit_firewall(mock_ssh, "prod")
         statuses = {f["check"]: f["severity"] for f in findings}
         assert statuses["Firewall installed and active"] == "critical"
+
+
+class TestAuditNetwork:
+    def test_minimal_network(self, mock_ssh):
+        mock_ssh.execute.side_effect = [
+            CommandResult(stdout="tcp 0 0 0.0.0.0:22 0.0.0.0:* LISTEN 1234/sshd\n", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="1\n", stderr="", exit_code=0, duration_ms=10),
+        ]
+        findings = _audit_network(mock_ssh, "prod")
+        statuses = {f["check"]: f["status"] for f in findings}
+        assert statuses["Listening ports"] == "INFO"
+        assert statuses["Outbound connections"] == "PASS"
+        assert statuses["IPv6 status"] == "PASS"
+
+    def test_exposed_network(self, mock_ssh):
+        mock_ssh.execute.side_effect = [
+            CommandResult(
+                stdout="tcp 0 0 0.0.0.0:22 0.0.0.0:* LISTEN 1234/sshd\ntcp 0 0 0.0.0.0:3306 0.0.0.0:* LISTEN 5678/mysqld\ntcp 0 0 0.0.0.0:6379 0.0.0.0:* LISTEN 9999/redis\n",
+                stderr="", exit_code=0, duration_ms=10,
+            ),
+            CommandResult(stdout="tcp 0 0 10.0.0.1:43210 185.100.87.206:4444 ESTABLISHED 666/suspicious\n", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="0\n", stderr="", exit_code=0, duration_ms=10),
+        ]
+        findings = _audit_network(mock_ssh, "prod")
+        statuses = {f["check"]: f["severity"] for f in findings}
+        assert statuses["Listening ports"] == "info"
+        assert statuses["Outbound connections"] == "warning"
+        assert statuses["IPv6 status"] == "info"
