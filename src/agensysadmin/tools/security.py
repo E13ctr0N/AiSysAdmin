@@ -249,6 +249,41 @@ def _audit_firewall(ssh: SSHManager, server: str) -> list[dict]:
     return findings
 
 
+def _audit_users(ssh: SSHManager, server: str) -> list[dict]:
+    findings = []
+
+    r = ssh.execute(server, "awk -F: '$3 == 0 {print $1}' /etc/passwd")
+    uid0_users = [u for u in r.stdout.strip().split("\n") if u.strip()]
+    extra = [u for u in uid0_users if u != "root"]
+    if extra:
+        findings.append(_make_finding("critical", "Extra UID 0 users", "FAIL", f"UID 0 users: {', '.join(extra)}", "Remove extra UID 0 accounts or change their UID"))
+    else:
+        findings.append(_make_finding("pass", "Extra UID 0 users", "PASS", "Only root has UID 0", ""))
+
+    r = ssh.execute(server, "sudo awk -F: '($2 == \"\" || $2 == \"!\") && $1 != \"*\" {print $1}' /etc/shadow 2>/dev/null")
+    empty_pw = [u for u in r.stdout.strip().split("\n") if u.strip()]
+    if empty_pw:
+        findings.append(_make_finding("critical", "Empty passwords", "FAIL", f"Accounts without password: {', '.join(empty_pw)}", "Set passwords or lock these accounts: passwd -l <user>"))
+    else:
+        findings.append(_make_finding("pass", "Empty passwords", "PASS", "No accounts with empty passwords", ""))
+
+    r = ssh.execute(server, "lastlog -b 90 2>/dev/null | tail -n +2 | awk '$2 != \"**Never\" && NF > 1 {print $1}'")
+    inactive = [u for u in r.stdout.strip().split("\n") if u.strip()]
+    if inactive:
+        findings.append(_make_finding("warning", "Inactive accounts", "WARN", f"Inactive >90 days: {', '.join(inactive[:5])}", "Review and disable inactive accounts: usermod -L <user>"))
+    else:
+        findings.append(_make_finding("pass", "Inactive accounts", "PASS", "No inactive accounts found", ""))
+
+    r = ssh.execute(server, "sudo grep -r 'NOPASSWD' /etc/sudoers /etc/sudoers.d/ 2>/dev/null")
+    if r.stdout.strip():
+        lines = r.stdout.strip().split("\n")
+        findings.append(_make_finding("warning", "NOPASSWD in sudoers", "WARN", f"{len(lines)} NOPASSWD entries found", "Remove NOPASSWD from sudoers unless absolutely required"))
+    else:
+        findings.append(_make_finding("pass", "NOPASSWD in sudoers", "PASS", "No NOPASSWD entries", ""))
+
+    return findings
+
+
 def _audit_network(ssh: SSHManager, server: str) -> list[dict]:
     findings = []
 

@@ -8,6 +8,7 @@ from agensysadmin.tools.security import (
     _audit_ssh,
     _audit_firewall,
     _audit_network,
+    _audit_users,
     _compute_scores,
     _format_report,
     _make_finding,
@@ -311,3 +312,33 @@ class TestAuditNetwork:
         assert statuses["Listening ports"] == "info"
         assert statuses["Outbound connections"] == "warning"
         assert statuses["IPv6 status"] == "info"
+
+
+class TestAuditUsers:
+    def test_clean_system(self, mock_ssh):
+        mock_ssh.execute.side_effect = [
+            CommandResult(stdout="root\n", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="", stderr="", exit_code=1, duration_ms=10),
+        ]
+        findings = _audit_users(mock_ssh, "prod")
+        statuses = {f["check"]: f["status"] for f in findings}
+        assert statuses["Extra UID 0 users"] == "PASS"
+        assert statuses["Empty passwords"] == "PASS"
+        assert statuses["Inactive accounts"] == "PASS"
+        assert statuses["NOPASSWD in sudoers"] == "PASS"
+
+    def test_compromised_system(self, mock_ssh):
+        mock_ssh.execute.side_effect = [
+            CommandResult(stdout="root\nbackdoor\n", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="guest\n", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="olduser\n", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="deploy ALL=(ALL) NOPASSWD: ALL\n", stderr="", exit_code=0, duration_ms=10),
+        ]
+        findings = _audit_users(mock_ssh, "prod")
+        statuses = {f["check"]: f["severity"] for f in findings}
+        assert statuses["Extra UID 0 users"] == "critical"
+        assert statuses["Empty passwords"] == "critical"
+        assert statuses["Inactive accounts"] == "warning"
+        assert statuses["NOPASSWD in sudoers"] == "warning"
