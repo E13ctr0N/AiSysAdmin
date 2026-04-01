@@ -12,6 +12,7 @@ from agensysadmin.tools.security import (
     _audit_users,
     _audit_filesystem,
     _audit_logs,
+    _audit_kernel,
     _audit_updates,
     _compute_scores,
     _format_report,
@@ -470,3 +471,43 @@ class TestAuditLogs:
         statuses = {f["check"]: f["severity"] for f in findings}
         assert statuses["fail2ban"] == "warning"
         assert statuses["auditd"] == "info"
+
+
+class TestAuditKernel:
+    def test_hardened_kernel(self, mock_ssh):
+        sysctl_output = (
+            "net.ipv4.ip_forward = 0\n"
+            "net.ipv4.tcp_syncookies = 1\n"
+            "net.ipv4.conf.all.rp_filter = 1\n"
+            "net.ipv4.conf.all.accept_redirects = 0\n"
+            "net.ipv4.conf.all.send_redirects = 0\n"
+            "kernel.randomize_va_space = 2\n"
+            "fs.protected_hardlinks = 1\n"
+            "fs.protected_symlinks = 1\n"
+        )
+        mock_ssh.execute.return_value = CommandResult(
+            stdout=sysctl_output, stderr="", exit_code=0, duration_ms=10,
+        )
+        findings = _audit_kernel(mock_ssh, "prod")
+        for f in findings:
+            assert f["status"] == "PASS", f"Expected PASS for {f['check']}, got {f['status']}"
+
+    def test_unhardened_kernel(self, mock_ssh):
+        sysctl_output = (
+            "net.ipv4.ip_forward = 1\n"
+            "net.ipv4.tcp_syncookies = 0\n"
+            "net.ipv4.conf.all.rp_filter = 0\n"
+            "net.ipv4.conf.all.accept_redirects = 1\n"
+            "net.ipv4.conf.all.send_redirects = 1\n"
+            "kernel.randomize_va_space = 0\n"
+            "fs.protected_hardlinks = 0\n"
+            "fs.protected_symlinks = 0\n"
+        )
+        mock_ssh.execute.return_value = CommandResult(
+            stdout=sysctl_output, stderr="", exit_code=0, duration_ms=10,
+        )
+        findings = _audit_kernel(mock_ssh, "prod")
+        severities = {f["check"]: f["severity"] for f in findings}
+        assert severities["ASLR (randomize_va_space)"] == "critical"
+        assert severities["IP forwarding"] == "warning"
+        assert severities["SYN cookies"] == "warning"

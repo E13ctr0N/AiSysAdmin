@@ -480,6 +480,39 @@ def _audit_logs(ssh: SSHManager, server: str) -> list[dict]:
     return findings
 
 
+_SYSCTL_CHECKS = [
+    ("net.ipv4.ip_forward", "0", "warning", "IP forwarding", "Disable: sysctl -w net.ipv4.ip_forward=0"),
+    ("net.ipv4.tcp_syncookies", "1", "warning", "SYN cookies", "Enable: sysctl -w net.ipv4.tcp_syncookies=1"),
+    ("net.ipv4.conf.all.rp_filter", "1", "warning", "Reverse path filtering", "Enable: sysctl -w net.ipv4.conf.all.rp_filter=1"),
+    ("net.ipv4.conf.all.accept_redirects", "0", "warning", "ICMP redirects", "Disable: sysctl -w net.ipv4.conf.all.accept_redirects=0"),
+    ("net.ipv4.conf.all.send_redirects", "0", "warning", "Send redirects", "Disable: sysctl -w net.ipv4.conf.all.send_redirects=0"),
+    ("kernel.randomize_va_space", "2", "critical", "ASLR (randomize_va_space)", "Enable: sysctl -w kernel.randomize_va_space=2"),
+    ("fs.protected_hardlinks", "1", "warning", "Protected hardlinks", "Enable: sysctl -w fs.protected_hardlinks=1"),
+    ("fs.protected_symlinks", "1", "warning", "Protected symlinks", "Enable: sysctl -w fs.protected_symlinks=1"),
+]
+
+
+def _audit_kernel(ssh: SSHManager, server: str) -> list[dict]:
+    findings = []
+
+    keys = " ".join(c[0] for c in _SYSCTL_CHECKS)
+    r = ssh.execute(server, f"sysctl {keys} 2>/dev/null")
+    values = {}
+    for line in r.stdout.strip().split("\n"):
+        if "=" in line:
+            k, v = line.split("=", 1)
+            values[k.strip()] = v.strip()
+
+    for key, expected, severity, check_name, recommendation in _SYSCTL_CHECKS:
+        actual = values.get(key, "unknown")
+        if actual == expected:
+            findings.append(_make_finding("pass", check_name, "PASS", f"{key} = {actual}", ""))
+        else:
+            findings.append(_make_finding(severity, check_name, "FAIL" if severity == "critical" else "WARN", f"{key} = {actual} (expected {expected})", recommendation))
+
+    return findings
+
+
 def check_updates_impl(
     ssh: SSHManager,
     server: str,
