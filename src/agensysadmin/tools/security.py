@@ -362,19 +362,22 @@ def _audit_filesystem(ssh: SSHManager, server: str) -> list[dict]:
     else:
         findings.append(_make_finding("warning", "/tmp mount options", "WARN", "/tmp not a separate mount", "Mount /tmp as separate partition with noexec,nosuid"))
 
-    r = ssh.execute(server, "ls -la /etc/shadow /etc/passwd /etc/ssh 2>/dev/null")
-    output = r.stdout.strip()
-    bad_perms = False
-    if output:
-        for line in output.split("\n"):
-            if "/etc/shadow" in line and (line[7] != "-" or line[8] != "-" or line[9] != "-"):
-                bad_perms = True
-            if "/etc/ssh" in line and line[7] != "-":
-                bad_perms = True
-    if bad_perms:
-        findings.append(_make_finding("critical", "Sensitive file permissions", "FAIL", "Insecure permissions detected", "Fix: chmod 640 /etc/shadow; chmod 700 /etc/ssh"))
+    # /etc/shadow — must not be world-readable (critical)
+    r = ssh.execute(server, "ls -la /etc/shadow 2>/dev/null")
+    shadow_line = r.stdout.strip()
+    shadow_bad = False
+    if shadow_line and len(shadow_line) > 9:
+        shadow_bad = shadow_line[7] != "-" or shadow_line[8] != "-" or shadow_line[9] != "-"
+    if shadow_bad:
+        findings.append(_make_finding("critical", "Sensitive file permissions", "FAIL", f"/etc/shadow has insecure permissions: {shadow_line[:10]}", "Fix: chmod 640 /etc/shadow"))
     else:
-        findings.append(_make_finding("pass", "Sensitive file permissions", "PASS", "Correct permissions on sensitive files", ""))
+        # /etc/ssh directory — 700 is ideal but 755 is Debian default (warning)
+        r = ssh.execute(server, "stat -c '%a %n' /etc/ssh 2>/dev/null")
+        ssh_perms = r.stdout.strip().split()[0] if r.stdout.strip() else ""
+        if ssh_perms and ssh_perms != "700":
+            findings.append(_make_finding("warning", "Sensitive file permissions", "WARN", f"/etc/ssh has permissions {ssh_perms} (recommended 700)", "Harden: chmod 700 /etc/ssh"))
+        else:
+            findings.append(_make_finding("pass", "Sensitive file permissions", "PASS", "Correct permissions on sensitive files", ""))
 
     return findings
 

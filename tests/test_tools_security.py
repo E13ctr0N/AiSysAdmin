@@ -357,7 +357,8 @@ class TestAuditFilesystem:
             CommandResult(stdout="/usr/bin/passwd\n/usr/bin/sudo\n/usr/bin/chfn\n", stderr="", exit_code=0, duration_ms=10),
             CommandResult(stdout="", stderr="", exit_code=0, duration_ms=10),
             CommandResult(stdout="/dev/sda2 on /tmp type ext4 (rw,nosuid,noexec)\n", stderr="", exit_code=0, duration_ms=10),
-            CommandResult(stdout="-rw-r----- 1 root shadow 1234 Jan 1 00:00 /etc/shadow\n-rw-r--r-- 1 root root 2345 Jan 1 00:00 /etc/passwd\ndrwx------ 2 root root 4096 Jan 1 00:00 /etc/ssh\n", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="-rw-r----- 1 root shadow 1234 Jan 1 00:00 /etc/shadow\n", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="700 /etc/ssh\n", stderr="", exit_code=0, duration_ms=10),
         ]
         findings = _audit_filesystem(mock_ssh, "prod")
         statuses = {f["check"]: f["status"] for f in findings}
@@ -366,7 +367,7 @@ class TestAuditFilesystem:
         assert statuses["/tmp mount options"] == "PASS"
         assert statuses["Sensitive file permissions"] == "PASS"
 
-    def test_insecure_filesystem(self, mock_ssh):
+    def test_insecure_shadow(self, mock_ssh):
         mock_ssh.execute.side_effect = [
             CommandResult(stdout="/usr/bin/passwd\n/usr/bin/sudo\n/opt/evil/backdoor\n", stderr="", exit_code=0, duration_ms=10),
             CommandResult(stdout="/etc/crontab\n/var/www/config.php\n", stderr="", exit_code=0, duration_ms=10),
@@ -379,6 +380,18 @@ class TestAuditFilesystem:
         assert statuses["World-writable files"] == "warning"
         assert statuses["/tmp mount options"] == "warning"
         assert statuses["Sensitive file permissions"] == "critical"
+
+    def test_ssh_dir_755_is_warning(self, mock_ssh):
+        mock_ssh.execute.side_effect = [
+            CommandResult(stdout="/usr/bin/passwd\n/usr/bin/sudo\n", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="/dev/sda2 on /tmp type ext4 (rw,nosuid,noexec)\n", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="-rw-r----- 1 root shadow 1234 Jan 1 00:00 /etc/shadow\n", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="755 /etc/ssh\n", stderr="", exit_code=0, duration_ms=10),
+        ]
+        findings = _audit_filesystem(mock_ssh, "prod")
+        statuses = {f["check"]: f["severity"] for f in findings}
+        assert statuses["Sensitive file permissions"] == "warning"
 
 
 class TestAuditServices:
@@ -581,12 +594,13 @@ class TestFullSecurityAudit:
             CommandResult(stdout="", stderr="", exit_code=0, duration_ms=10),
             CommandResult(stdout="1\n", stderr="", exit_code=0, duration_ms=10),
         ]
-        # Filesystem: 4
+        # Filesystem: 5
         fs_r = [
             CommandResult(stdout="/usr/bin/passwd\n/usr/bin/sudo\n", stderr="", exit_code=0, duration_ms=10),
             CommandResult(stdout="", stderr="", exit_code=0, duration_ms=10),
             CommandResult(stdout="/dev/sda2 on /tmp type ext4 (rw,nosuid,noexec)\n", stderr="", exit_code=0, duration_ms=10),
             CommandResult(stdout="-rw-r----- 1 root shadow 1234 Jan 1 00:00 /etc/shadow\n", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="700 /etc/ssh\n", stderr="", exit_code=0, duration_ms=10),
         ]
         # Services: 2
         svc_r = [
