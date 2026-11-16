@@ -2,6 +2,7 @@ import pytest
 from unittest.mock import MagicMock
 from agensysadmin.ssh_manager import SSHManager, CommandResult
 from agensysadmin.tools.reports import generate_report_impl
+import agensysadmin.tools.reports as reports
 
 
 @pytest.fixture
@@ -49,3 +50,27 @@ class TestGenerateReport:
         mock_ssh.execute.return_value = CommandResult(stdout="test\n", stderr="", exit_code=0, duration_ms=10)
         result = generate_report_impl(mock_ssh, "prod")
         assert isinstance(result["report"], str)
+
+    def test_partial_report_is_not_success_and_sanitizes_error(self, mock_ssh, monkeypatch):
+        secret = "password=should-not-appear"
+        monkeypatch.setattr(reports, "system_info_impl", lambda *_: (_ for _ in ()).throw(RuntimeError(secret)))
+        monkeypatch.setattr(reports, "disk_usage_impl", lambda *_: {"filesystems": []})
+        monkeypatch.setattr(reports, "check_ports_impl", lambda *_: {"ports": []})
+        monkeypatch.setattr(reports, "check_services_impl", lambda *_: {"raw_output": ""})
+
+        result = generate_report_impl(mock_ssh, "prod")
+
+        assert result["success"] is False
+        assert result["complete"] is False
+        assert result["section_status"]["system_info"] == "failed:RuntimeError"
+        assert secret not in result["report"]
+        assert "Unavailable (RuntimeError)." in result["report"]
+
+    def test_report_marks_command_status_failure_incomplete(self, mock_ssh, monkeypatch):
+        monkeypatch.setattr(reports, "system_info_impl", lambda *_: {"success": True})
+        monkeypatch.setattr(reports, "disk_usage_impl", lambda *_: {"success": False, "error_type": "CommandUnavailable"})
+        monkeypatch.setattr(reports, "check_ports_impl", lambda *_: {"success": True, "ports": []})
+        monkeypatch.setattr(reports, "check_services_impl", lambda *_: {"success": True, "raw_output": ""})
+        result = generate_report_impl(mock_ssh, "prod")
+        assert result["success"] is False
+        assert result["section_status"]["disk_usage"] == "failed:CommandUnavailable"

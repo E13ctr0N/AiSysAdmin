@@ -10,6 +10,17 @@ from agensysadmin.validation import (
 
 VALID_SERVICE_ACTIONS = {"start", "stop", "restart", "reload", "enable", "disable", "status"}
 MAX_CONFIG_CONTENT_BYTES = 256 * 1024
+_SAFE_CONFIG_READ_SCRIPT = r'''set -eu
+target=$1
+if [ -L "$target" ]; then
+  printf '%s\n' 'refusing to read symbolic-link config target' >&2
+  exit 64
+fi
+if [ ! -f "$target" ]; then
+  printf '%s\n' 'config target must be a regular file' >&2
+  exit 64
+fi
+cat -- "$target"'''
 _ATOMIC_CONFIG_WRITE_SCRIPT = r'''set -eu
 target=$1
 create_backup=$2
@@ -36,7 +47,33 @@ if [ "$create_backup" = 1 ]; then
     rm -f -- "$backup"
     exit 1
   fi
+  # The content snapshot must remain private.  Keep restoration attributes in a
+  # separate private sidecar so a future operator can restore them deliberately.
+  metadata=$(mktemp "${dir}/.${base}.agensysadmin-backup-meta.XXXXXX")
+  if ! (
+    printf '%s\n' 'format=agensysadmin-config-backup-metadata-v1'
+    printf 'target_path=%s\n' "$target"
+    printf 'content_backup_path=%s\n' "$backup"
+    printf '%s\n' '[stat]'
+    stat --printf 'mode=%a\nuid=%u\ngid=%g\naccess_time=%x\nmodify_time=%y\nchange_time=%z\n' -- "$target" || exit 1
+    if command -v getfacl >/dev/null 2>&1; then
+      printf '%s\n' '[acl]'
+      getfacl --absolute-names -- "$target" 2>/dev/null || printf '%s\n' 'unavailable=true'
+    else
+      printf '%s\n' '[acl-unavailable]'
+    fi
+    if command -v getfattr >/dev/null 2>&1; then
+      printf '%s\n' '[xattrs]'
+      getfattr --absolute-names --match=- -d -- "$target" 2>/dev/null || printf '%s\n' 'unavailable=true'
+    else
+      printf '%s\n' '[xattrs-unavailable]'
+    fi
+  ) > "$metadata"; then
+    rm -f -- "$metadata" "$backup"
+    exit 1
+  fi
   printf 'backup_path=%s\n' "$backup"
+  printf 'backup_metadata_path=%s\n' "$metadata"
 fi
 tmp=$(mktemp "${dir}/.${base}.agensysadmin.XXXXXX")
 trap 'rm -f -- "$tmp"' EXIT HUP INT TERM
@@ -65,7 +102,9 @@ def manage_service_impl(
         )
 
     service = validate_service_name(service)
-    result = ssh.execute(server, f"sudo -n systemctl --no-pager {action} -- {shell_quote(service)}")
+    result = ssh.execute_privileged(
+        server, f"systemctl --no-pager {action} -- {shell_quote(service)}"
+    )
 
     return {
         "success": result.exit_code == 0,
@@ -89,7 +128,7 @@ def install_package_impl(
     packages = [validate_package_name(package) for package in packages]
 
     if update:
-        update_result = ssh.execute(server, "sudo -n apt-get update -qq", timeout=60)
+        update_result = ssh.execute_privileged(server, "apt-get update -qq", timeout=60)
         if update_result.exit_code != 0:
             return {
                 "success": False,
@@ -101,8 +140,8 @@ def install_package_impl(
             }
 
     pkg_list = " ".join(shell_quote(package) for package in packages)
-    result = ssh.execute(
-        server, f"sudo -n apt-get install -y -- {pkg_list}", timeout=120
+    result = ssh.execute_privileged(
+        server, f"apt-get install -y -- {pkg_list}", timeout=120
     )
 
     return {
@@ -125,7 +164,10 @@ def edit_config_impl(
     path = validate_absolute_path(path)
     quoted_path = shell_quote(path)
     if content is None:
-        result = ssh.execute(server, f"sudo -n cat -- {quoted_path}")
+        result = ssh.execute_privileged(
+            server,
+            f"sh -c {shell_quote(_SAFE_CONFIG_READ_SCRIPT)} sh {quoted_path}",
+        )
         return {
             "success": result.exit_code == 0,
             "exit_code": result.exit_code,
@@ -136,12 +178,13 @@ def edit_config_impl(
 
     content_bytes = _encode_config_content(content)
 
-    result = ssh.execute(
+    result = ssh.execute_privileged(
         server,
-        f"sudo -n sh -c {shell_quote(_ATOMIC_CONFIG_WRITE_SCRIPT)} sh {quoted_path} {1 if backup else 0} {len(content_bytes)}",
+        f"sh -c {shell_quote(_ATOMIC_CONFIG_WRITE_SCRIPT)} sh {quoted_path} {1 if backup else 0} {len(content_bytes)}",
         input_data=content_bytes,
     )
     backup_path = _extract_backup_path(result.stdout) if backup else None
+    backup_metadata_path = _extract_backup_metadata_path(result.stdout) if backup else None
 
     return {
         "success": result.exit_code == 0,
@@ -151,6 +194,7 @@ def edit_config_impl(
         "path": path,
         "backup_created": backup_path is not None,
         "backup_path": backup_path,
+        "backup_metadata_path": backup_metadata_path,
         "duration_ms": result.duration_ms,
     }
 
@@ -173,4 +217,13 @@ def _extract_backup_path(stdout: str) -> str | None:
     for line in stdout.splitlines():
         if line.startswith("backup_path="):
             return validate_absolute_path(line.removeprefix("backup_path="), "backup_path")
+    return None
+
+
+def _extract_backup_metadata_path(stdout: str) -> str | None:
+    for line in stdout.splitlines():
+        if line.startswith("backup_metadata_path="):
+            return validate_absolute_path(
+                line.removeprefix("backup_metadata_path="), "backup_metadata_path"
+            )
     return None

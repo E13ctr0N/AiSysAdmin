@@ -1,5 +1,11 @@
 # AiSysAdmin security review — 2026-11-16
 
+This document records the initial hardening review. The consolidated 0.2
+implementation adds sessions, root-aware sudo, metadata-only history, exact file
+capabilities and extended audits. Its current behavior and migration requirements
+are documented in [local integration notes](local-integration.md) and the README;
+those supersede the initial upgrade snapshot below.
+
 ## Scope
 
 Static review and local regression tests of the MCP entry points, SSH transport,

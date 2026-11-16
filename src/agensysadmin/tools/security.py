@@ -3,26 +3,49 @@ from __future__ import annotations
 import re
 import shlex
 from datetime import datetime, timezone
+from html import escape
+from paramiko import SSHException
+from agensysadmin.ssh_manager import CommandResult
 
 from agensysadmin.ssh_manager import SSHManager
+from agensysadmin.profiles import profile_for, forwarding_expected
+from agensysadmin.tools.security_common import make_finding as _make_finding
+from agensysadmin.tools.security_vpn import _audit_vpn
+from agensysadmin.tools.security_docker import _audit_docker_security
+from agensysadmin.tools.security_extended import (audit_password_policy, audit_network_details, audit_custom_units, audit_update_details, audit_monitoring)
 
 
 class _AuditProbe:
-    """Conservative category completeness: failed probes never become a safe score."""
-    def __init__(self, ssh: SSHManager):
+    """Track failed probes and cache identical read-only facts within one audit."""
+    def __init__(self, ssh: SSHManager, cache: dict | None = None):
         self.ssh = ssh
         self.failed = False
+        self.cache = cache if cache is not None else {}
 
-    def execute(self, server: str, command: str, timeout: int | None = None):
-        # Audit commands are fixed application strings. Linux targets require
-        # bash so failures before the last pipeline stage remain observable.
-        result = self.ssh.execute(server, f"bash -o pipefail -c {shlex.quote(command)}", timeout=timeout)
+    def _run(self, server, command, timeout, privileged):
+        key = (server, command, timeout, privileged)
+        if key not in self.cache:
+            method = self.ssh.execute_privileged if privileged else self.ssh.execute
+            try:
+                self.cache[key] = method(server, f"bash -o pipefail -c {shlex.quote(command)}", timeout=timeout)
+            except (OSError, ValueError, SSHException):
+                self.cache[key] = CommandResult("", "Audit probe could not complete", 255, 0)
+        result = self.cache[key]
         no_failed_logins = "grep -c 'Failed password'" in command and result.exit_code == 1 and result.stdout.strip() == "0"
-        missing_program = command.startswith("which ") and result.exit_code == 1 and not result.stderr.strip()
+        missing_program = (command.startswith("which ") or command.startswith("command -v ")) and result.exit_code == 1 and not result.stderr.strip()
         inactive_service = command.startswith("systemctl is-active ") and result.exit_code in {3, 4} and result.stdout.strip() in {"inactive", "failed", "unknown"} and not result.stderr.strip()
         if result.exit_code != 0 and not (no_failed_logins or missing_program or inactive_service):
             self.failed = True
         return result
+
+    def execute(self, server, command, timeout=None):
+        return self._run(server, command, timeout, False)
+
+    def execute_privileged(self, server, command, timeout=None):
+        return self._run(server, command, timeout, True)
+
+    def server_profile(self, server):
+        return profile_for(self.ssh, server)
 
 
 def _grep_or_empty(command: str) -> str:
@@ -36,78 +59,34 @@ def _optional_file(path: str) -> str:
     return f"test -r {shlex.quote(parent)} && test -x {shlex.quote(parent)} && if test -f {shlex.quote(path)}; then printf '%s' {shlex.quote(path)}; fi"
 
 
-def _make_finding(
-    severity: str, check: str, status: str, detail: str, recommendation: str
-) -> dict:
-    return {
-        "severity": severity,
-        "check": check,
-        "status": status,
-        "detail": detail,
-        "recommendation": recommendation,
-    }
-
-
 def _compute_scores(categories: dict) -> dict:
-    summary = {"critical": 0, "warning": 0, "info": 0, "pass": 0}
+    summary = {"critical": 0, "warning": 0, "info": 0, "pass": 0, "unknown": 0}
     cat_scores = {}
-    total_weight = 0
-
+    scored_weight = 0
+    weighted_score = 0
     for name, cat in categories.items():
         findings = cat["findings"]
-        weight = cat["weight"]
-        total_weight += weight
-
-        has_critical = False
-        pass_count = 0
-        total_count = 0
-
-        for f in findings:
-            sev = f["severity"]
-            summary[sev] = summary.get(sev, 0) + 1
-            if sev == "critical":
-                has_critical = True
-            if sev == "pass":
-                pass_count += 1
-            total_count += 1
-
-        if has_critical:
-            cat_score = 0
-        elif total_count == 0:
-            cat_score = 100
+        for finding in findings:
+            severity = finding["severity"]
+            summary[severity] = summary.get(severity, 0) + 1
+            summary["unknown"] += finding["status"] == "UNKNOWN"
+        complete = cat.get("complete", True) and not any(f["status"] == "UNKNOWN" for f in findings)
+        assessed = [f for f in findings if f["status"] in {"PASS", "WARN", "FAIL"}]
+        if not complete:
+            score = 0
+        elif not assessed:
+            score = None  # INFO and NOT_APPLICABLE are not proof of hardening.
+        elif any(f["severity"] == "critical" for f in assessed):
+            score = 0
         else:
-            cat_score = int(pass_count / total_count * 100)
-
-        cat_scores[name] = {"score": cat_score, "findings": findings, "complete": cat.get("complete", True)}
-
-    if total_weight == 0:
-        overall = 0
-    else:
-        overall = int(
-            sum(
-                cat_scores[n]["score"] * categories[n]["weight"]
-                for n in categories
-            )
-            / total_weight
-        )
-
-    if overall >= 90:
-        grade = "A"
-    elif overall >= 70:
-        grade = "B"
-    elif overall >= 50:
-        grade = "C"
-    elif overall >= 30:
-        grade = "D"
-    else:
-        grade = "F"
-
-    return {
-        "score": overall,
-        "grade": grade,
-        "summary": summary,
-        "categories": cat_scores,
-    }
+            score = int(sum(f["status"] == "PASS" for f in assessed) / len(assessed) * 100)
+        cat_scores[name] = {"score": score, "findings": findings, "complete": complete}
+        if score is not None:
+            scored_weight += cat["weight"]
+            weighted_score += score * cat["weight"]
+    overall = int(weighted_score / scored_weight) if scored_weight else 0
+    grade = "A" if overall >= 90 else "B" if overall >= 70 else "C" if overall >= 50 else "D" if overall >= 30 else "F"
+    return {"score": overall, "grade": grade, "summary": summary, "categories": cat_scores}
 
 
 def _format_report(
@@ -139,6 +118,8 @@ def _format_report(
         "logs": "Logs & Audit",
         "kernel": "Kernel & Sysctl",
         "malware": "Malware/Rootkit",
+        "vpn": "VPN/Tunnels",
+        "docker": "Docker Security",
     }
 
     recommendations = []
@@ -146,13 +127,16 @@ def _format_report(
     for name, cat in categories.items():
         cat_score = scores["categories"][name]["score"]
         title = category_titles.get(name, name.title())
-        lines.append(f"## {title} (score: {cat_score}/100)")
+        score_label = "not scored" if cat_score is None else f"{cat_score}/100"
+        lines.append(f"## {title} (score: {score_label})")
         lines.append("")
         lines.append("| Status | Check | Detail |")
         lines.append("|---|---|---|")
 
         for f in cat["findings"]:
-            lines.append(f"| {f['status']} | {f['check']} | {f['detail']} |")
+            def cell(value):
+                return escape(str(value)).replace("|", "\\|").replace("\n", " ").replace("\r", " ")
+            lines.append(f"| {cell(f['status'])} | {cell(f['check'])} | {cell(f['detail'])} |")
             if f["recommendation"] and f["status"] != "PASS":
                 tag = f["severity"].upper()
                 recommendations.append(f"[{tag}] {f['recommendation']}")
@@ -171,23 +155,34 @@ def _format_report(
 # Use the actual SSH account/address context, including Include and applicable
 # Match rules. Hostname-based Match rules still need a separately verified DNS
 # context; the peer IP is supplied as host here and this limitation is reported.
-_EFFECTIVE_SSH_COMMAND = (
-    'set -f; set -- $SSH_CONNECTION; [ "$#" -eq 4 ] || exit 2; '
-    'exec sudo -n /usr/sbin/sshd -T -C '
-    '"user=$(id -un),addr=$1,host=$1,laddr=$3,lport=$4"'
-)
+_SSH_CONTEXT_COMMAND = 'printf "%s\\n" "$(id -un)" "$SSH_CONNECTION"'
 
 
 def _effective_ssh_settings(ssh: SSHManager, server: str) -> dict[str, str]:
-    result = ssh.execute(server, _EFFECTIVE_SSH_COMMAND)
+    context = ssh.execute(server, _SSH_CONTEXT_COMMAND)
+    lines = context.stdout.splitlines()
+    if context.exit_code != 0 or len(lines) != 2 or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.-]*[$]?", lines[0]):
+        return {}
+    fields = lines[1].split()
+    if len(fields) != 4:
+        return {}
+    import ipaddress
+    try:
+        peer, local = str(ipaddress.ip_address(fields[0])), str(ipaddress.ip_address(fields[2]))
+    except ValueError:
+        return {}
+    if not all(value.isdecimal() and 0 < int(value) <= 65535 for value in (fields[1], fields[3])):
+        return {}
+    specification = f"user={lines[0]},addr={peer},host={peer},laddr={local},lport={fields[3]}"
+    result = ssh.execute_privileged(server, "/usr/sbin/sshd -T -C " + shlex.quote(specification))
     if result.exit_code != 0:
         return {}
     settings: dict[str, str] = {}
     for line in result.stdout.splitlines():
-        key, sep, value = line.strip().partition(" ")
-        if sep and value.strip():
-            key = key.lower()
-            settings[key] = (settings.get(key, "") + " " + value.strip()).strip()
+        parts = line.strip().split(None, 1)
+        if len(parts) == 2:
+            key, value = parts
+            settings[key.lower()] = (settings.get(key.lower(), "") + " " + value).strip()
     return settings
 
 
@@ -253,7 +248,7 @@ def _audit_firewall(ssh: SSHManager, server: str) -> list[dict]:
         return findings
 
     if fw_type == "ufw":
-        r = ssh.execute(server, "sudo -n ufw status verbose")
+        r = ssh.execute_privileged(server, "ufw status verbose")
         output = r.stdout.strip()
         active = "Status: active" in output
 
@@ -272,9 +267,9 @@ def _audit_firewall(ssh: SSHManager, server: str) -> list[dict]:
 
     else:
         if fw_type == "iptables":
-            r = ssh.execute(server, "sudo -n iptables -L INPUT -n 2>/dev/null | tail -n +3")
+            r = ssh.execute_privileged(server, "iptables -L INPUT -n 2>/dev/null | tail -n +3")
         else:
-            r = ssh.execute(server, "sudo -n nft list ruleset 2>/dev/null")
+            r = ssh.execute_privileged(server, "nft list ruleset 2>/dev/null")
 
         has_rules = bool(r.stdout.strip())
         if has_rules:
@@ -283,7 +278,7 @@ def _audit_firewall(ssh: SSHManager, server: str) -> list[dict]:
             findings.append(_make_finding("critical", "Firewall installed and active", "FAIL", f"{fw_type} installed but no rules", f"Configure {fw_type} rules"))
 
         if fw_type == "iptables":
-            r = ssh.execute(server, "sudo -n iptables -L INPUT -n 2>/dev/null | head -1")
+            r = ssh.execute_privileged(server, "iptables -L INPUT -n 2>/dev/null | head -1")
             if "DROP" in r.stdout or "REJECT" in r.stdout:
                 findings.append(_make_finding("pass", "Default INPUT policy", "PASS", "INPUT policy DROP/REJECT", ""))
             else:
@@ -307,7 +302,7 @@ def _audit_users(ssh: SSHManager, server: str) -> list[dict]:
     else:
         findings.append(_make_finding("pass", "Extra UID 0 users", "PASS", "Only root has UID 0", ""))
 
-    r = ssh.execute(server, "sudo -n awk -F: '$2 == \"\" {print $1}' /etc/shadow 2>/dev/null")
+    r = ssh.execute_privileged(server, "awk -F: '$2 == \"\" {print $1}' /etc/shadow 2>/dev/null")
     empty_pw = [u for u in r.stdout.strip().split("\n") if u.strip()]
     if empty_pw:
         findings.append(_make_finding("critical", "Empty passwords", "FAIL", f"Accounts without password: {', '.join(empty_pw)}", "Set passwords or lock these accounts: passwd -l <user>"))
@@ -322,7 +317,7 @@ def _audit_users(ssh: SSHManager, server: str) -> list[dict]:
         findings.append(_make_finding("pass", "Inactive accounts", "PASS", "No inactive accounts found", ""))
 
     grep_script = _grep_or_empty("grep -r 'NOPASSWD' /etc/sudoers /etc/sudoers.d/")
-    r = ssh.execute(server, f"sudo -n sh -c {shlex.quote(grep_script)}")
+    r = ssh.execute_privileged(server, f"sh -c {shlex.quote(grep_script)}")
     if r.stdout.strip():
         lines = r.stdout.strip().split("\n")
         findings.append(_make_finding("warning", "NOPASSWD in sudoers", "WARN", f"{len(lines)} NOPASSWD entries found", "Remove NOPASSWD from sudoers unless absolutely required"))
@@ -335,7 +330,7 @@ def _audit_users(ssh: SSHManager, server: str) -> list[dict]:
 def _audit_network(ssh: SSHManager, server: str) -> list[dict]:
     findings = []
 
-    r = ssh.execute(server, "sudo -n ss -tlnp 2>/dev/null || sudo -n netstat -tlnp 2>/dev/null")
+    r = ssh.execute_privileged(server, "ss -tlnp 2>/dev/null || netstat -tlnp 2>/dev/null")
     lines = [l for l in r.stdout.strip().split("\n") if l.strip() and "LISTEN" in l]
     port_details = []
     for l in lines:
@@ -346,7 +341,7 @@ def _audit_network(ssh: SSHManager, server: str) -> list[dict]:
                 break
     findings.append(_make_finding("info", "Listening ports", "INFO", f"{len(lines)} ports listening: {', '.join(port_details[:10])}", "Review and close unnecessary ports"))
 
-    r = ssh.execute(server, "sudo -n ss -tnp state established | " + _grep_or_empty("grep -v '127.0.0.1'") + " | " + _grep_or_empty("grep -v '::1'") + " | tail -n +2")
+    r = ssh.execute_privileged(server, "ss -tnp state established | " + _grep_or_empty("grep -v '127.0.0.1'") + " | " + _grep_or_empty("grep -v '::1'") + " | tail -n +2")
     outbound = [l for l in r.stdout.strip().split("\n") if l.strip()]
     if outbound:
         findings.append(_make_finding("warning", "Outbound connections", "WARN", f"{len(outbound)} established outbound connections", "Review outbound connections for suspicious activity"))
@@ -378,7 +373,7 @@ _KNOWN_SUID = {
 def _audit_filesystem(ssh: SSHManager, server: str) -> list[dict]:
     findings = []
 
-    r = ssh.execute(server, "find / -perm /6000 -type f 2>/dev/null | head -50", timeout=60)
+    r = ssh.execute_privileged(server, "find / -perm /6000 -type f 2>/dev/null | head -50", timeout=60)
     suid_files = [f for f in r.stdout.strip().split("\n") if f.strip()]
     unknown_suid = [f for f in suid_files if f not in _KNOWN_SUID]
     if unknown_suid:
@@ -386,7 +381,7 @@ def _audit_filesystem(ssh: SSHManager, server: str) -> list[dict]:
     else:
         findings.append(_make_finding("pass", "SUID/SGID binaries", "PASS", f"{len(suid_files)} standard SUID/SGID binaries", ""))
 
-    r = ssh.execute(server, "find / -path /tmp -prune -o -path /var/tmp -prune -o -path /proc -prune -o -path /sys -prune -o -type f -perm -o+w -print 2>/dev/null | head -20", timeout=60)
+    r = ssh.execute_privileged(server, "find / -path /tmp -prune -o -path /var/tmp -prune -o -path /proc -prune -o -path /sys -prune -o -type f -perm -o+w -print 2>/dev/null | head -20", timeout=60)
     ww_files = [f for f in r.stdout.strip().split("\n") if f.strip()]
     if ww_files:
         findings.append(_make_finding("warning", "World-writable files", "WARN", f"{len(ww_files)} files: {', '.join(ww_files[:5])}", "Remove world-writable permissions: chmod o-w <file>"))
@@ -521,14 +516,14 @@ def _audit_logs(ssh: SSHManager, server: str) -> list[dict]:
     else:
         findings.append(_make_finding("info", "Logrotate", "INFO", "Logrotate not found", "Install: apt install logrotate"))
 
-    r = ssh.execute(server, "sudo -n grep -c 'Failed password' /var/log/auth.log")
+    r = ssh.execute_privileged(server, "grep -c 'Failed password' /var/log/auth.log")
     try:
         count = int(r.stdout.strip())
     except ValueError:
         count = 0
     findings.append(_make_finding("info", "Failed login attempts", "INFO", f"{count} failed login attempts in auth.log", ""))
 
-    r = ssh.execute(server, "sudo -n cat /var/log/auth.log | " + _grep_or_empty("grep 'COMMAND='") + " | tail -10")
+    r = ssh.execute_privileged(server, "cat /var/log/auth.log | " + _grep_or_empty("grep 'COMMAND='") + " | tail -10")
     lines = [l for l in r.stdout.strip().split("\n") if l.strip()]
     findings.append(_make_finding("info", "Recent sudo activity", "INFO", f"{len(lines)} recent sudo commands", ""))
 
@@ -558,8 +553,22 @@ def _audit_kernel(ssh: SSHManager, server: str) -> list[dict]:
             k, v = line.split("=", 1)
             values[k.strip()] = v.strip()
 
+    profile = profile_for(ssh, server)
     for key, expected, severity, check_name, recommendation in _SYSCTL_CHECKS:
         actual = values.get(key, "unknown")
+        if actual == "unknown":
+            findings.append(_make_finding("warning", check_name, "UNKNOWN", f"{key} unavailable", "Check sysctl availability"))
+            continue
+        if key == "net.ipv4.ip_forward":
+            policy = forwarding_expected(profile)
+            if policy is None:
+                findings.append(_make_finding("info", check_name, "INFO", f"{key}={actual}; generic profile has no forwarding policy", "Set the intended server profile before recommending a change"))
+                continue
+            expected = policy
+            recommendation = f"Review forwarding against the {profile} profile; no automatic change is performed"
+        if key == "net.ipv4.conf.all.rp_filter" and profile == "vpn_node":
+            findings.append(_make_finding("info", check_name, "INFO", f"{key}={actual}; tunnel/asymmetric routing needs contextual policy", "Review routing before changing reverse-path filtering"))
+            continue
         if actual == expected:
             findings.append(_make_finding("pass", check_name, "PASS", f"{key} = {actual}", ""))
         else:
@@ -572,7 +581,7 @@ def _audit_malware(ssh: SSHManager, server: str) -> list[dict]:
     findings = []
 
     cron_script = 'set -e; if [ -f /etc/crontab ]; then cat /etc/crontab; fi; for d in /etc/cron.d /var/spool/cron/crontabs; do if [ -d "$d" ]; then find "$d" -maxdepth 1 -type f -exec cat -- {} +; fi; done'
-    r = ssh.execute(server, f"sudo -n sh -c {shlex.quote(cron_script)}")
+    r = ssh.execute_privileged(server, f"sh -c {shlex.quote(cron_script)}")
     cron_lines = [l for l in r.stdout.strip().split("\n") if l.strip() and not l.startswith("#")]
     suspicious_cron = [l for l in cron_lines if any(kw in l.lower() for kw in ["curl", "wget", "bash -c", "/dev/tcp", "base64", "eval", "nc ", "ncat"])]
     if suspicious_cron:
@@ -580,20 +589,20 @@ def _audit_malware(ssh: SSHManager, server: str) -> list[dict]:
     else:
         findings.append(_make_finding("pass", "Suspicious crontab entries", "PASS", "No suspicious crontab entries", ""))
 
-    r = ssh.execute(server, "sudo -n find /proc -maxdepth 3 -path '/proc/[0-9]*/exe' -lname '* (deleted)' -ls")
+    r = ssh.execute_privileged(server, "find /proc -maxdepth 3 -path '/proc/[0-9]*/exe' -lname '* (deleted)' -ls")
     deleted = [l for l in r.stdout.strip().split("\n") if l.strip()]
     if deleted:
         findings.append(_make_finding("critical", "Processes without binary", "FAIL", f"{len(deleted)} processes with deleted binaries", "Investigate processes running from deleted binaries"))
     else:
         findings.append(_make_finding("pass", "Processes without binary", "PASS", "All processes have on-disk binaries", ""))
 
-    r = ssh.execute(server, r"sudo -n find /tmp /dev/shm /usr/lib /usr/bin -maxdepth 2 \( -path '/tmp/.ice-unix/.x' -o -path '/tmp/.font-unix/.x' -o -path '/dev/shm/.x' -o -path '/usr/lib/libamplify.so' -o -path '/usr/bin/.sshd' \) -ls")
+    r = ssh.execute_privileged(server, r"find /tmp /dev/shm /usr/lib /usr/bin -maxdepth 2 \( -path '/tmp/.ice-unix/.x' -o -path '/tmp/.font-unix/.x' -o -path '/dev/shm/.x' -o -path '/usr/lib/libamplify.so' -o -path '/usr/bin/.sshd' \) -ls")
     if r.stdout.strip():
         findings.append(_make_finding("critical", "Known rootkit paths", "FAIL", f"Found: {r.stdout.strip()}", "Investigate immediately — possible rootkit"))
     else:
         findings.append(_make_finding("pass", "Known rootkit paths", "PASS", "No known rootkit files found", ""))
 
-    r = ssh.execute(server, "find /tmp /dev/shm -maxdepth 2 -name '.*' -not -name '.' -not -name '..' -not -name '.ICE-unix' -not -name '.X11-unix' -not -name '.font-unix' -not -name '.XIM-unix' 2>/dev/null")
+    r = ssh.execute_privileged(server, "find /tmp /dev/shm -maxdepth 2 -name '.*' -not -name '.' -not -name '..' -not -name '.ICE-unix' -not -name '.X11-unix' -not -name '.font-unix' -not -name '.XIM-unix' 2>/dev/null")
     hidden = [f for f in r.stdout.strip().split("\n") if f.strip()]
     if hidden:
         findings.append(_make_finding("warning", "Hidden files in /tmp, /dev/shm", "WARN", f"{len(hidden)} hidden files: {', '.join(hidden[:5])}", "Review hidden files in /tmp and /dev/shm"))
@@ -646,7 +655,7 @@ def check_updates_impl(
 
 
 def firewall_status_impl(ssh: SSHManager, server: str) -> dict:
-    result = ssh.execute(server, "sudo -n ufw status verbose")
+    result = ssh.execute_privileged(server, "ufw status verbose")
 
     if result.exit_code != 0:
         return {
@@ -715,7 +724,7 @@ def security_audit_impl(ssh: SSHManager, server: str) -> dict:
         "if test -f /etc/apt/apt.conf.d/20auto-upgrades; then printf present; else printf absent; fi")
     auto_known = auto_updates.exit_code == 0 and auto_updates.stdout.strip() in {"present", "absent"}
 
-    failed_logins = ssh.execute(server, "sudo -n grep -c 'Failed password' /var/log/auth.log")
+    failed_logins = ssh.execute_privileged(server, "grep -c 'Failed password' /var/log/auth.log")
     count_known = failed_logins.exit_code in {0, 1} and failed_logins.stdout.strip().isdecimal()
     failed_count = int(failed_logins.stdout.strip()) if count_known else None
 
@@ -723,7 +732,7 @@ def security_audit_impl(ssh: SSHManager, server: str) -> dict:
     users_known = root_users.exit_code == 0
     root_users_list = [u for u in root_users.stdout.splitlines() if u.strip()] if users_known else None
 
-    world_writable = ssh.execute(server, "sudo -n find /etc -type f -perm -o+w")
+    world_writable = ssh.execute_privileged(server, "find /etc -type f -perm -o+w")
     files_known = world_writable.exit_code == 0
     ww_files = [f for f in world_writable.stdout.splitlines() if f.strip()] if files_known else None
 
@@ -750,19 +759,27 @@ def full_security_audit_impl(ssh: SSHManager, server: str) -> dict:
     ip = ip_result.stdout.strip().split()[0] if ip_result.stdout.strip() else "unknown"
     metadata_complete = hostname_result.exit_code == 0 and ip_result.exit_code == 0 and bool(hostname_result.stdout.strip()) and bool(ip_result.stdout.strip())
 
+    def combined(base, extra):
+        return lambda probe, name: base(probe, name) + extra(probe, name)
+
     definitions = {
-        "ssh": (15, _audit_ssh), "firewall": (15, _audit_firewall),
-        "users": (15, _audit_users), "network": (10, _audit_network),
-        "filesystem": (10, _audit_filesystem), "services": (5, _audit_services),
-        "updates": (10, _audit_updates), "logs": (5, _audit_logs),
-        "kernel": (10, _audit_kernel), "malware": (5, _audit_malware),
+        "ssh": (12, _audit_ssh), "firewall": (12, _audit_firewall),
+        "users": (12, combined(_audit_users, audit_password_policy)),
+        "network": (12, combined(_audit_network, audit_network_details)),
+        "filesystem": (8, _audit_filesystem),
+        "services": (5, combined(_audit_services, audit_custom_units)),
+        "updates": (10, combined(_audit_updates, audit_update_details)),
+        "logs": (5, combined(_audit_logs, audit_monitoring)),
+        "kernel": (8, _audit_kernel), "malware": (5, _audit_malware),
+        "vpn": (6, _audit_vpn), "docker": (5, _audit_docker_security),
     }
     categories = {}
+    cache = {}
     for name, (weight, audit) in definitions.items():
-        probe = _AuditProbe(ssh)
+        probe = _AuditProbe(ssh, cache)
         findings = audit(probe, server)
         complete = not probe.failed and not any(f["status"] == "UNKNOWN" for f in findings)
-        if not complete:
+        if not complete and name not in {"vpn", "docker"}:
             # Avoid presenting empty output after permission/tool errors as proof
             # of safety. Retesting this category is required before using its score.
             findings = [_make_finding("warning", "Incomplete category", "UNKNOWN",
@@ -777,6 +794,7 @@ def full_security_audit_impl(ssh: SSHManager, server: str) -> dict:
         "success": metadata_complete and all(cat["complete"] for cat in categories.values()),
         "complete": metadata_complete and all(cat["complete"] for cat in categories.values()),
         "metadata_complete": metadata_complete,
+        "profile": profile_for(ssh, server),
         "score": scores["score"],
         "grade": scores["grade"],
         "summary": scores["summary"],

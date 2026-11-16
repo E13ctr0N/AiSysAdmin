@@ -308,7 +308,7 @@ def test_failed_stdin_write_closes_channel(connected_manager):
     stdin.close.assert_called_once()
 
 
-@pytest.mark.parametrize("data", ["not-bytes", b"a" * (256 * 1024 + 1)])
+@pytest.mark.parametrize("data", ["not-bytes", b"a" * (256 * 1024 + 1)], ids=["non-bytes", "oversized"])
 def test_invalid_input_rejected_before_execution(connected_manager, data):
     manager, client = connected_manager
     with pytest.raises(ValueError, match="input_data"):

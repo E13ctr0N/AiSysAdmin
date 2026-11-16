@@ -1,21 +1,15 @@
 servers:
-  prod:
-    host: 192.168.1.10
-    port: 22
-    user: admin
-    key_env: PROD_SSH_KEY_PATH
-    # Verify the host key independently before enrolling it in this trust file.
+  staging:
+    host: staging.example.invalid
+    user: operator
+    key_env: STAGING_SSH_KEY_PATH
+    role: Example container host
+    profile: docker_host
     known_hosts_path: ~/.ssh/known_hosts
     allow_mutations: false
     allow_arbitrary_commands: false
+    config_read_paths: []
+    config_write_paths: []
     allow_agent: false
     look_for_keys: false
-
-  staging:
-    host: 192.168.1.20
-    port: 2222
-    user: deploy
-    key_env: STAGING_SSH_KEY_PATH
-    known_hosts_path: ~/.ssh/known_hosts
-    allow_mutations: false
-    allow_arbitrary_commands: false
+    # sudo_password_env: STAGING_SUDO_PASSWORD

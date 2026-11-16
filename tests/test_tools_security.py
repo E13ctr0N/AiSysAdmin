@@ -2,6 +2,7 @@ import pytest
 from unittest.mock import MagicMock
 from agensysadmin.ssh_manager import SSHManager, CommandResult
 from agensysadmin.tools.security import (
+    _SSH_CONTEXT_COMMAND,
     check_updates_impl,
     firewall_status_impl,
     full_security_audit_impl,
@@ -22,9 +23,20 @@ from agensysadmin.tools.security import (
 )
 
 
+class ContextExecuteMock(MagicMock):
+    def __call__(self, *args, **kwargs):
+        if len(args) > 1 and args[1] == _SSH_CONTEXT_COMMAND:
+            return CommandResult("operator\n192.0.2.10 40000 192.0.2.20 22\n", "", 0, 0)
+        return super().__call__(*args, **kwargs)
+
+
 @pytest.fixture
 def mock_ssh():
-    return MagicMock(spec=SSHManager)
+    ssh = MagicMock(spec=SSHManager)
+    ssh.execute = ContextExecuteMock()
+    ssh.execute_privileged = ssh.execute
+    ssh.server_profile = MagicMock(return_value="web")
+    return ssh
 
 
 class TestCheckUpdates:
@@ -523,81 +535,13 @@ class TestAuditMalware:
 
 
 class TestFullSecurityAudit:
-    def test_returns_complete_structure(self, mock_ssh):
-        # Meta: hostname + IP
-        meta = [
-            CommandResult(stdout="testhost\n", stderr="", exit_code=0, duration_ms=10),
-            CommandResult(stdout="1.2.3.4\n", stderr="", exit_code=0, duration_ms=10),
-        ]
-        # SSH: 6 commands
-        ssh_r = [CommandResult(stdout='PermitRootLogin no\nPasswordAuthentication no\nPubkeyAuthentication yes\nPort 2222\nMaxAuthTries 3\nAllowUsers admin\n', stderr="", exit_code=0, duration_ms=10)]
-        # Firewall: 2 (ufw found + status)
-        fw_r = [
-            CommandResult(stdout="/usr/sbin/ufw\n", stderr="", exit_code=0, duration_ms=10),
-            CommandResult(stdout="Status: active\nDefault: deny (incoming), allow (outgoing)\n", stderr="", exit_code=0, duration_ms=10),
-        ]
-        # Users: 4
-        usr_r = [
-            CommandResult(stdout="root\n", stderr="", exit_code=0, duration_ms=10),
-            CommandResult(stdout="", stderr="", exit_code=0, duration_ms=10),
-            CommandResult(stdout="", stderr="", exit_code=0, duration_ms=10),
-            CommandResult(stdout="", stderr="", exit_code=1, duration_ms=10),
-        ]
-        # Network: 3
-        net_r = [
-            CommandResult(stdout="tcp LISTEN 0.0.0.0:22\n", stderr="", exit_code=0, duration_ms=10),
-            CommandResult(stdout="", stderr="", exit_code=0, duration_ms=10),
-            CommandResult(stdout="1\n", stderr="", exit_code=0, duration_ms=10),
-        ]
-        # Filesystem: 5
-        fs_r = [
-            CommandResult(stdout="/usr/bin/passwd\n/usr/bin/sudo\n", stderr="", exit_code=0, duration_ms=10),
-            CommandResult(stdout="", stderr="", exit_code=0, duration_ms=10),
-            CommandResult(stdout="/dev/sda2 on /tmp type ext4 (rw,nosuid,noexec)\n", stderr="", exit_code=0, duration_ms=10),
-            CommandResult(stdout="-rw-r----- 1 root shadow 1234 Jan 1 00:00 /etc/shadow\n", stderr="", exit_code=0, duration_ms=10),
-            CommandResult(stdout="700 /etc/ssh\n", stderr="", exit_code=0, duration_ms=10),
-        ]
-        # Services: 2
-        svc_r = [
-            CommandResult(stdout="ssh.service\n", stderr="", exit_code=0, duration_ms=10),
-            CommandResult(stdout="", stderr="", exit_code=1, duration_ms=10),
-        ]
-        # Updates: 5
-        upd_r = [CommandResult(stdout="Listing...\n", stderr="", exit_code=0, duration_ms=10), CommandResult(stdout="6.1.0-43\n6.1.0-43\n", stderr="", exit_code=0, duration_ms=10), CommandResult(stdout="/etc/apt/apt.conf.d/20auto-upgrades\n", stderr="", exit_code=0, duration_ms=10)]
-        # Logs: 5
-        log_r = [
-            CommandResult(stdout="active\n", stderr="", exit_code=0, duration_ms=10),
-            CommandResult(stdout="active\n", stderr="", exit_code=0, duration_ms=10),
-            CommandResult(stdout="/etc/logrotate.conf\n", stderr="", exit_code=0, duration_ms=10),
-            CommandResult(stdout="0\n", stderr="", exit_code=0, duration_ms=10),
-            CommandResult(stdout="", stderr="", exit_code=0, duration_ms=10),
-        ]
-        # Kernel: 1
-        kern_r = [
-            CommandResult(
-                stdout="net.ipv4.ip_forward = 0\nnet.ipv4.tcp_syncookies = 1\nnet.ipv4.conf.all.rp_filter = 1\nnet.ipv4.conf.all.accept_redirects = 0\nnet.ipv4.conf.all.send_redirects = 0\nkernel.randomize_va_space = 2\nfs.protected_hardlinks = 1\nfs.protected_symlinks = 1\n",
-                stderr="", exit_code=0, duration_ms=10,
-            ),
-        ]
-        # Malware: 5
-        mal_r = [
-            CommandResult(stdout="# empty\n", stderr="", exit_code=0, duration_ms=10),
-            CommandResult(stdout="", stderr="", exit_code=0, duration_ms=10),
-            CommandResult(stdout="", stderr="", exit_code=0, duration_ms=10),
-            CommandResult(stdout="", stderr="", exit_code=0, duration_ms=10),
-            CommandResult(stdout="127.0.0.1 localhost\n", stderr="", exit_code=0, duration_ms=10),
-        ]
-
-        mock_ssh.execute.side_effect = meta + ssh_r + fw_r + usr_r + net_r + fs_r + svc_r + upd_r + log_r + kern_r + mal_r
-
+    def test_returns_complete_structure_even_when_probes_are_unavailable(self, mock_ssh):
+        mock_ssh.execute.return_value = CommandResult("", "unavailable", 127, 0)
         result = full_security_audit_impl(mock_ssh, "prod")
-
-        assert "score" in result
-        assert "grade" in result
-        assert "summary" in result
-        assert "categories" in result
-        assert "report_markdown" in result
+        assert result["success"] is False
+        assert result["complete"] is False
         assert isinstance(result["score"], int)
         assert result["grade"] in ("A", "B", "C", "D", "F")
         assert "# Security Audit Report" in result["report_markdown"]
-        assert len(result["categories"]) == 10
+        assert set(result["categories"]) == {"ssh", "firewall", "users", "network", "filesystem", "services", "updates", "logs", "kernel", "malware", "vpn", "docker"}
+        assert result["profile"] == "web"

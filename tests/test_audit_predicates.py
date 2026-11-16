@@ -29,6 +29,11 @@ def test_healthy_negative_categories_remain_complete(monkeypatch):
         return CommandResult("", "", 0, 0)  # find succeeds with no matches
 
     ssh.execute.side_effect = execute
+    ssh.execute_privileged.side_effect = execute
+    for extra in ("audit_password_policy", "audit_network_details", "audit_custom_units", "audit_update_details", "audit_monitoring"):
+        monkeypatch.setattr(security, extra, lambda ssh, server: [])
+    for extra in ("_audit_vpn", "_audit_docker_security"):
+        monkeypatch.setattr(security, extra, lambda ssh, server: [security._make_finding("info", "Not installed", "NOT_APPLICABLE", "Absent")])
     for name in ("ssh", "firewall", "users", "network", "filesystem", "updates", "logs", "kernel"):
         monkeypatch.setattr(security, "_audit_" + name,
                             lambda ssh, server: [security._make_finding("pass", "Checked", "PASS", "ok", "")])

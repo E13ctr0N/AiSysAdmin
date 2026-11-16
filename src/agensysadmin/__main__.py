@@ -1,3 +1,4 @@
-from agensysadmin.server import mcp
+from agensysadmin.cli import main
 
-mcp.run()
+if __name__ == "__main__":
+    raise SystemExit(main())

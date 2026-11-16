@@ -6,3 +6,13 @@ servers.yaml
 dist/
 .venv/
 .pytest_cache/
+/keys/
+/logs/
+/private/
+/docs/servers/
+/.playwright-mcp/
+/.claude/
+/tools/xray-test/
+/.agensysadmin-enrollment.lock
+.env.*
+!.env.example

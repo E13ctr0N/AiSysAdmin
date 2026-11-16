@@ -129,3 +129,32 @@ def test_custom_known_hosts_resolves_relative_to_config(tmp_path):
     (tmp_path / "servers.yaml").write_text(
         "servers:\n  test:\n    host: example.invalid\n    user: admin\n    known_hosts_path: trusted_hosts\n")
     assert load_config(tmp_path)["test"].known_hosts_path == str((tmp_path / "trusted_hosts").resolve())
+
+
+@pytest.mark.parametrize("value", ['"false"', '"true"', "true", "1"])
+def test_legacy_unknown_host_trust_cannot_be_enabled(tmp_path, value):
+    (tmp_path / "servers.yaml").write_text(
+        f"servers:\n  test:\n    host: example.invalid\n    user: operator\n    allow_unknown_host_key: {value}\n")
+    with pytest.raises(ValueError, match="verified host keys"):
+        load_config(tmp_path)
+
+
+def test_local_config_metadata_and_sudo_refs_are_preserved(tmp_path, monkeypatch):
+    monkeypatch.setenv("TEST_SUDO_PASSWORD", "not-a-real-password")
+    (tmp_path / "servers.yaml").write_text(
+        "servers:\n  test:\n    host: example.invalid\n    user: operator\n"
+        "    role: Container host\n    description: Example only\n    profile: docker_host\n"
+        "    sudo_password_env: TEST_SUDO_PASSWORD\n    known_hosts_file: ./trusted_hosts\n")
+    config = load_config(tmp_path)["test"]
+    assert config.role == "Container host" and config.profile == "docker_host"
+    assert config.sudo_password == "not-a-real-password"
+    assert "not-a-real-password" not in repr(config)
+    assert config.known_hosts_path == str((tmp_path / "trusted_hosts").resolve())
+
+
+@pytest.mark.parametrize("paths", ['"/etc/example"', '["/etc/../shadow"]', '["/etc/*"]', '["relative"]'])
+def test_config_file_allowlists_require_exact_absolute_paths(tmp_path, paths):
+    (tmp_path / "servers.yaml").write_text(
+        f"servers:\n  test:\n    host: example.invalid\n    user: root\n    config_read_paths: {paths}\n")
+    with pytest.raises(ValueError):
+        load_config(tmp_path)

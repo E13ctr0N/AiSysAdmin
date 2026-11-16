@@ -21,4 +21,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
       - run: pip install -e ".[dev]"
+      - run: python scripts/check_publication.py
       - run: pytest -q
+      - run: python -m compileall -q src tests
+      - run: pip check

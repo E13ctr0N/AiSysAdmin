@@ -7,15 +7,35 @@ from agensysadmin.validation import shell_quote, validate_service_name
 
 
 def system_info_impl(ssh: SSHManager, server: str) -> dict:
-    uname = ssh.execute(server, "uname -a").stdout.strip()
-    uptime = ssh.execute(server, "uptime -p").stdout.strip()
-    free_output = ssh.execute(server, "free -b").stdout
-    cpu_cores = int(ssh.execute(server, "nproc").stdout.strip())
-    loadavg = ssh.execute(server, "cat /proc/loadavg").stdout.strip()
+    uname_result = ssh.execute(server, "uname -a")
+    uptime_result = ssh.execute(server, "uptime -p")
+    free_result = ssh.execute(server, "free -b")
+    nproc_result = ssh.execute(server, "nproc")
+    loadavg_result = ssh.execute(server, "cat /proc/loadavg")
+    results = [uname_result, uptime_result, free_result, nproc_result, loadavg_result]
+    failures = [result for result in results if result.exit_code != 0]
+    if failures:
+        return {
+            "success": False,
+            "complete": False,
+            "error_type": _command_error_type(failures[0].exit_code),
+        }
 
-    memory = _parse_free(free_output)
+    try:
+        uname = uname_result.stdout.strip()
+        uptime = uptime_result.stdout.strip()
+        free_output = free_result.stdout
+        cpu_cores = int(nproc_result.stdout.strip())
+        loadavg = loadavg_result.stdout.strip()
+        memory = _parse_free(free_output)
+        if not uname or not uptime or cpu_cores < 1 or len(loadavg.split()) < 3 or "mem" not in memory:
+            raise ValueError("incomplete system information")
+    except (IndexError, ValueError):
+        return {"success": False, "complete": False, "error_type": "ParseError"}
 
     return {
+        "success": True,
+        "complete": True,
         "uname": uname,
         "uptime": uptime,
         "cpu_cores": cpu_cores,
@@ -50,7 +70,15 @@ def _parse_free(output: str) -> dict:
 
 
 def disk_usage_impl(ssh: SSHManager, server: str) -> dict:
-    output = ssh.execute(server, "df -h --output=source,size,used,avail,pcent,target").stdout
+    result = ssh.execute(server, "df -h --output=source,size,used,avail,pcent,target")
+    if result.exit_code != 0:
+        return {
+            "success": False,
+            "complete": False,
+            "error_type": _command_error_type(result.exit_code),
+            "filesystems": [],
+        }
+    output = result.stdout
     lines = output.strip().split("\n")
     filesystems = []
     for line in lines[1:]:
@@ -64,7 +92,7 @@ def disk_usage_impl(ssh: SSHManager, server: str) -> dict:
                 "use_percent": parts[4],
                 "mounted_on": parts[5],
             })
-    return {"filesystems": filesystems}
+    return {"success": True, "complete": True, "filesystems": filesystems}
 
 
 def check_services_impl(
@@ -72,24 +100,55 @@ def check_services_impl(
 ) -> dict:
     if services:
         result_services = {}
+        complete = True
         for svc in services:
             svc = validate_service_name(svc)
             output = ssh.execute(server, f"systemctl status --no-pager -- {shell_quote(svc)}")
+            known_state = (
+                output.exit_code in {0, 3} and "Active:" in output.stdout
+            ) or (
+                output.exit_code == 4 and (
+                    "Loaded: not-found" in output.stdout
+                    or "could not be found" in output.stdout.lower()
+                )
+            )
+            if not known_state:
+                complete = False
             active = "active (running)" in output.stdout
             result_services[svc] = {
                 "active": active,
                 "raw_output": output.stdout.strip(),
             }
-        return {"services": result_services}
+        return {
+            "success": complete,
+            "complete": complete,
+            "error_type": None if complete else "CommandFailed",
+            "services": result_services,
+        }
     else:
         output = ssh.execute(
             server, "systemctl list-units --type=service --state=running --no-pager"
         )
-        return {"raw_output": output.stdout.strip()}
+        if output.exit_code != 0:
+            return {
+                "success": False,
+                "complete": False,
+                "error_type": _command_error_type(output.exit_code),
+                "raw_output": output.stdout.strip(),
+            }
+        return {"success": True, "complete": True, "raw_output": output.stdout.strip()}
 
 
 def check_ports_impl(ssh: SSHManager, server: str) -> dict:
-    output = ssh.execute(server, "ss -tlnp").stdout
+    result = ssh.execute(server, "ss -tlnp")
+    if result.exit_code != 0:
+        return {
+            "success": False,
+            "complete": False,
+            "error_type": _command_error_type(result.exit_code),
+            "ports": [],
+        }
+    output = result.stdout
     lines = output.strip().split("\n")
     ports = []
     for line in lines:
@@ -108,7 +167,11 @@ def check_ports_impl(ssh: SSHManager, server: str) -> dict:
             process = process_match.group(1)
 
         ports.append({"port": port, "address": local_addr, "process": process})
-    return {"ports": ports}
+    return {"success": True, "complete": True, "ports": ports}
+
+
+def _command_error_type(exit_code: int) -> str:
+    return "CommandUnavailable" if exit_code == 127 else "CommandFailed"
 
 
 def process_list_impl(

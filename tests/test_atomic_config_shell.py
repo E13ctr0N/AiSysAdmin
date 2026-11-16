@@ -1,6 +1,7 @@
 """Execute the production POSIX script against temporary local files, without SSH/sudo."""
 import os
 from pathlib import Path
+import shlex
 import shutil
 import subprocess
 
@@ -21,11 +22,11 @@ def bash():
     return executable
 
 
-def write_config(bash, target, data, backup=True, expected_bytes=None):
+def write_config(bash, target, data, backup=True, expected_bytes=None, env=None):
     return subprocess.run(
-        [bash, "-c", _ATOMIC_CONFIG_WRITE_SCRIPT, "sh", target.as_posix(),
+        [bash, "--noprofile", "--norc", "-c", _ATOMIC_CONFIG_WRITE_SCRIPT, "sh", target.as_posix(),
          "1" if backup else "0", str(len(data) if expected_bytes is None else expected_bytes)],
-        input=data, capture_output=True, timeout=10,
+        input=data, capture_output=True, timeout=10, env=env,
     )
 
 
@@ -42,8 +43,14 @@ def test_atomic_write_preserves_exact_content_and_unique_backup(bash, tmp_path):
     assert backup.parent == target.parent
     assert backup.read_bytes() == b"original\n"
     assert backup.name.startswith(".app ' $(inert).conf.agensysadmin-backup.")
+    metadata_lines = [line for line in result.stdout.decode().splitlines() if line.startswith("backup_metadata_path=")]
+    assert len(metadata_lines) == 1
+    metadata = Path(metadata_lines[0].removeprefix("backup_metadata_path="))
+    assert metadata.parent == target.parent
+    assert "format=agensysadmin-config-backup-metadata-v1" in metadata.read_text()
+    assert "content_backup_path=" + backup.as_posix() in metadata.read_text()
     assert not Path(str(target) + ".bak").exists()
-    assert not list(tmp_path.glob(".*.agensysadmin.*"))
+    assert not list(tmp_path.glob(".*.agensysadmin.??????"))
 
 
 def test_truncated_stdin_leaves_original_and_cleans_temp(bash, tmp_path):
@@ -52,7 +59,7 @@ def test_truncated_stdin_leaves_original_and_cleans_temp(bash, tmp_path):
     result = write_config(bash, target, b"partial", expected_bytes=100)
     assert result.returncode == 65
     assert target.read_bytes() == b"keep this"
-    assert not list(tmp_path.glob(".*.agensysadmin.*"))
+    assert not list(tmp_path.glob(".*.agensysadmin.??????"))
 
 
 def test_create_requires_explicit_no_backup_and_allows_empty_file(bash, tmp_path):
@@ -101,3 +108,52 @@ def test_preserves_mode_refuses_target_symlink_and_leaves_planted_bak_alone(bash
     assert victim.read_bytes() == b"unchanged"
     assert Path(str(target) + ".bak").is_symlink()
     assert target.read_bytes() == b"bad"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Linux filesystem metadata")
+def test_backup_metadata_is_private_and_records_restore_attributes(bash, tmp_path):
+    target = tmp_path / "app.conf"
+    target.write_bytes(b"old")
+    target.chmod(0o640)
+    result = write_config(bash, target, b"new")
+    assert result.returncode == 0, result.stderr
+    lines = result.stdout.decode().splitlines()
+    backup = Path(next(line.removeprefix("backup_path=") for line in lines if line.startswith("backup_path=")))
+    metadata = Path(next(line.removeprefix("backup_metadata_path=") for line in lines if line.startswith("backup_metadata_path=")))
+    assert backup.stat().st_mode & 0o777 == 0o600
+    assert metadata.stat().st_mode & 0o777 == 0o600
+    record = metadata.read_text()
+    assert f"target_path={target.as_posix()}" in record
+    assert f"content_backup_path={backup.as_posix()}" in record
+    assert "mode=640" in record
+    assert "uid=" in record
+    assert "gid=" in record
+
+
+def test_metadata_capture_failure_cleans_private_artifacts_and_preserves_target(bash, tmp_path):
+    target = tmp_path / "app.conf"
+    target.write_bytes(b"original")
+    shim_dir = tmp_path / "shim"
+    shim_dir.mkdir()
+    stat_shim = shim_dir / "stat"
+    stat_shim.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    stat_shim.chmod(0o700)
+    env = os.environ.copy()
+    if os.name == "nt":
+        shim_path = subprocess.check_output(
+            [bash, "-c", "cygpath -u \"$1\"", "sh", str(shim_dir)], text=True
+        ).strip()
+    else:
+        shim_path = str(shim_dir)
+    bash_env = tmp_path / "bash_env"
+    bash_env.write_text(
+        f"PATH={shlex.quote(shim_path)}:$PATH\nexport PATH\n", encoding="utf-8"
+    )
+    env["BASH_ENV"] = str(bash_env)
+
+    result = write_config(bash, target, b"replacement", env=env)
+
+    assert result.returncode != 0
+    assert target.read_bytes() == b"original"
+    assert not list(tmp_path.glob(".app.conf.agensysadmin-backup.*"))
+    assert not list(tmp_path.glob(".app.conf.agensysadmin-backup-meta.*"))
