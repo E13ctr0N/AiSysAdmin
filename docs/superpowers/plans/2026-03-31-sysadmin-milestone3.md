@@ -95,7 +95,7 @@ class TestDockerPs:
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd D:/AI/AgenSysAdmin && .venv/Scripts/python -m pytest tests/test_tools_docker.py::TestDockerPs -v`
+Run: `cd /path/to/agensysadmin && .venv/Scripts/python -m pytest tests/test_tools_docker.py::TestDockerPs -v`
 
 - [ ] **Step 3: Implement docker_ps_impl**
 
@@ -149,7 +149,7 @@ NOTE: The tests use raw `docker ps` output (table format with headers), but the 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd D:/AI/AgenSysAdmin && git add src/agensysadmin/tools/docker.py tests/test_tools_docker.py && git commit -m "feat: add docker_ps tool"
+cd /path/to/agensysadmin && git add src/agensysadmin/tools/docker.py tests/test_tools_docker.py && git commit -m "feat: add docker_ps tool"
 ```
 
 ---
@@ -229,7 +229,7 @@ def docker_logs_impl(
 - [ ] **Step 5: Commit**
 
 ```bash
-cd D:/AI/AgenSysAdmin && git add src/agensysadmin/tools/docker.py tests/test_tools_docker.py && git commit -m "feat: add docker_logs tool"
+cd /path/to/agensysadmin && git add src/agensysadmin/tools/docker.py tests/test_tools_docker.py && git commit -m "feat: add docker_logs tool"
 ```
 
 ---
@@ -339,7 +339,7 @@ def docker_compose_impl(
 - [ ] **Step 5: Commit**
 
 ```bash
-cd D:/AI/AgenSysAdmin && git add src/agensysadmin/tools/docker.py tests/test_tools_docker.py && git commit -m "feat: add docker_compose tool"
+cd /path/to/agensysadmin && git add src/agensysadmin/tools/docker.py tests/test_tools_docker.py && git commit -m "feat: add docker_compose tool"
 ```
 
 ---
@@ -468,10 +468,10 @@ Add to the expected set in `test_all_tools_registered`:
 
 - [ ] **Step 5: Run full test suite**
 
-Run: `cd D:/AI/AgenSysAdmin && .venv/Scripts/python -m pytest tests/ -v`
+Run: `cd /path/to/agensysadmin && .venv/Scripts/python -m pytest tests/ -v`
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd D:/AI/AgenSysAdmin && git add src/agensysadmin/tools/docker.py tests/test_tools_docker.py src/agensysadmin/server.py tests/test_server_integration.py && git commit -m "feat: add Docker tools — docker_ps, docker_logs, docker_compose, docker_images"
+cd /path/to/agensysadmin && git add src/agensysadmin/tools/docker.py tests/test_tools_docker.py src/agensysadmin/server.py tests/test_server_integration.py && git commit -m "feat: add Docker tools — docker_ps, docker_logs, docker_compose, docker_images"
 ```

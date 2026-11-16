@@ -199,7 +199,7 @@ def list_backups_impl(
 - [ ] **Step 5: Commit**
 
 ```bash
-cd D:/AI/AgenSysAdmin && git add src/agensysadmin/tools/backup.py tests/test_tools_backup.py && git commit -m "feat: add create_backup and list_backups tools"
+cd /path/to/agensysadmin && git add src/agensysadmin/tools/backup.py tests/test_tools_backup.py && git commit -m "feat: add create_backup and list_backups tools"
 ```
 
 ---
@@ -332,10 +332,10 @@ def check_cron(server: str, user: str | None = None) -> dict:
 
 - [ ] **Step 5: Run full test suite**
 
-Run: `cd D:/AI/AgenSysAdmin && .venv/Scripts/python -m pytest tests/ -v`
+Run: `cd /path/to/agensysadmin && .venv/Scripts/python -m pytest tests/ -v`
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd D:/AI/AgenSysAdmin && git add src/agensysadmin/tools/backup.py tests/test_tools_backup.py src/agensysadmin/server.py tests/test_server_integration.py && git commit -m "feat: add backup tools — create_backup, list_backups, check_cron"
+cd /path/to/agensysadmin && git add src/agensysadmin/tools/backup.py tests/test_tools_backup.py src/agensysadmin/server.py tests/test_server_integration.py && git commit -m "feat: add backup tools — create_backup, list_backups, check_cron"
 ```

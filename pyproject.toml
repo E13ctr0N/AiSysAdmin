@@ -4,11 +4,11 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agensysadmin"
-version = "0.1.0"
+version = "0.2.0"
 description = "MCP server for remote Linux server administration via SSH"
 requires-python = ">=3.11"
 dependencies = [
-    "mcp>=1.20",
+    "mcp>=1.20,<2",
     "paramiko>=3.4",
     "pyyaml>=6.0",
     "python-dotenv>=1.0",
@@ -20,9 +20,13 @@ dev = [
     "pytest-asyncio>=0.24",
 ]
 
+[project.scripts]
+agensysadmin = "agensysadmin.cli:main"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/agensysadmin"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"

@@ -204,5 +204,5 @@ Update integration test expected set: add `"generate_report"`.
 - [ ] **Step 7: Commit**
 
 ```bash
-cd D:/AI/AgenSysAdmin && git add src/agensysadmin/tools/reports.py tests/test_tools_reports.py src/agensysadmin/server.py tests/test_server_integration.py && git commit -m "feat: add generate_report tool — markdown server reports"
+cd /path/to/agensysadmin && git add src/agensysadmin/tools/reports.py tests/test_tools_reports.py src/agensysadmin/server.py tests/test_server_integration.py && git commit -m "feat: add generate_report tool — markdown server reports"
 ```

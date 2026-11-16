@@ -96,7 +96,7 @@ class TestCheckUpdates:
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd D:/AI/AgenSysAdmin && .venv/Scripts/python -m pytest tests/test_tools_security.py::TestCheckUpdates -v`
+Run: `cd /path/to/agensysadmin && .venv/Scripts/python -m pytest tests/test_tools_security.py::TestCheckUpdates -v`
 
 - [ ] **Step 3: Implement check_updates_impl**
 
@@ -145,7 +145,7 @@ def check_updates_impl(
 - [ ] **Step 5: Commit**
 
 ```bash
-cd D:/AI/AgenSysAdmin && git add src/agensysadmin/tools/security.py tests/test_tools_security.py && git commit -m "feat: add check_updates tool"
+cd /path/to/agensysadmin && git add src/agensysadmin/tools/security.py tests/test_tools_security.py && git commit -m "feat: add check_updates tool"
 ```
 
 ---
@@ -280,7 +280,7 @@ def firewall_status_impl(ssh: SSHManager, server: str) -> dict:
 - [ ] **Step 5: Commit**
 
 ```bash
-cd D:/AI/AgenSysAdmin && git add src/agensysadmin/tools/security.py tests/test_tools_security.py && git commit -m "feat: add firewall_status tool"
+cd /path/to/agensysadmin && git add src/agensysadmin/tools/security.py tests/test_tools_security.py && git commit -m "feat: add firewall_status tool"
 ```
 
 ---
@@ -451,10 +451,10 @@ Add to expected set:
 
 - [ ] **Step 5: Run full test suite**
 
-Run: `cd D:/AI/AgenSysAdmin && .venv/Scripts/python -m pytest tests/ -v`
+Run: `cd /path/to/agensysadmin && .venv/Scripts/python -m pytest tests/ -v`
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd D:/AI/AgenSysAdmin && git add src/agensysadmin/tools/security.py tests/test_tools_security.py src/agensysadmin/server.py tests/test_server_integration.py && git commit -m "feat: add security tools — check_updates, firewall_status, security_audit"
+cd /path/to/agensysadmin && git add src/agensysadmin/tools/security.py tests/test_tools_security.py src/agensysadmin/server.py tests/test_server_integration.py && git commit -m "feat: add security tools — check_updates, firewall_status, security_audit"
 ```

@@ -56,6 +56,17 @@ class TestSystemInfo:
         assert "total" in result["memory"]
         assert "total" in result["swap"]
 
+    def test_system_info_reports_command_failure_as_incomplete(self, mock_ssh):
+        mock_ssh.execute.side_effect = [
+            CommandResult(stdout="Linux", stderr="", exit_code=0, duration_ms=1),
+            CommandResult(stdout="up", stderr="", exit_code=0, duration_ms=1),
+            CommandResult(stdout="", stderr="df missing", exit_code=127, duration_ms=1),
+            CommandResult(stdout="4", stderr="", exit_code=0, duration_ms=1),
+            CommandResult(stdout="0 0 0", stderr="", exit_code=0, duration_ms=1),
+        ]
+        result = system_info_impl(mock_ssh, "prod")
+        assert result == {"success": False, "complete": False, "error_type": "CommandUnavailable"}
+
 
 class TestDiskUsage:
     def test_disk_usage_parses_df(self, mock_ssh):
@@ -72,6 +83,12 @@ class TestDiskUsage:
         assert len(result["filesystems"]) == 2
         assert result["filesystems"][0]["mounted_on"] == "/"
         assert result["filesystems"][0]["use_percent"] == "42%"
+
+    def test_disk_usage_failure_is_not_empty_success(self, mock_ssh):
+        mock_ssh.execute.return_value = CommandResult(stdout="", stderr="df failed", exit_code=127, duration_ms=1)
+        result = disk_usage_impl(mock_ssh, "prod")
+        assert result["success"] is False
+        assert result["error_type"] == "CommandUnavailable"
 
 
 class TestCheckServices:
@@ -115,6 +132,16 @@ class TestCheckServices:
         result = check_services_impl(mock_ssh, "prod", services=None)
         assert result["raw_output"] is not None
 
+    def test_check_services_rejects_injection(self, mock_ssh):
+        with pytest.raises(ValueError, match="service name"):
+            check_services_impl(mock_ssh, "prod", services=["nginx;id"])
+        mock_ssh.execute.assert_not_called()
+
+    def test_specific_service_command_failure_is_incomplete(self, mock_ssh):
+        mock_ssh.execute.return_value = CommandResult(stdout="", stderr="denied", exit_code=1, duration_ms=1)
+        result = check_services_impl(mock_ssh, "prod", services=["nginx"])
+        assert result["success"] is False
+
 
 class TestCheckPorts:
     def test_check_ports(self, mock_ssh):
@@ -130,6 +157,11 @@ class TestCheckPorts:
         assert len(result["ports"]) == 2
         assert result["ports"][0]["port"] == 80
         assert result["ports"][0]["process"] == "nginx"
+
+    def test_ports_command_failure_is_not_empty_success(self, mock_ssh):
+        mock_ssh.execute.return_value = CommandResult(stdout="", stderr="ss missing", exit_code=127, duration_ms=1)
+        result = check_ports_impl(mock_ssh, "prod")
+        assert result["success"] is False
 
 
 class TestProcessList:
@@ -160,3 +192,7 @@ class TestProcessList:
 
         result = process_list_impl(mock_ssh, "prod", sort_by="memory")
         assert result["processes"][0]["mem_percent"] == 12.5
+
+    def test_process_list_rejects_unknown_sort(self, mock_ssh):
+        with pytest.raises(ValueError, match="sort_by"):
+            process_list_impl(mock_ssh, "prod", sort_by="cpu;id")

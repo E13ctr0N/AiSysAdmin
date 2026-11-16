@@ -86,13 +86,13 @@ Empty file — just marks the package.
 ```yaml
 servers:
   prod:
-    host: 192.168.1.10
+    host: 192.0.2.21
     port: 22
     user: admin
     key_env: PROD_SSH_KEY_PATH
 
   staging:
-    host: 192.168.1.20
+    host: 192.0.2.22
     port: 2222
     user: deploy
     key_env: STAGING_SSH_KEY_PATH
@@ -127,7 +127,7 @@ dist/
 
 - [ ] **Step 7: Install dependencies**
 
-Run: `cd D:/AI/AgenSysAdmin && python -m venv .venv && .venv/Scripts/activate && pip install -e ".[dev]"`
+Run: `cd /path/to/agensysadmin && python -m venv .venv && .venv/Scripts/activate && pip install -e ".[dev]"`
 Expected: successful install, no errors.
 
 - [ ] **Step 8: Commit**
@@ -163,12 +163,12 @@ def config_dir(tmp_path):
     servers_yaml.write_text("""
 servers:
   prod:
-    host: 10.0.0.1
+    host: 192.0.2.11
     port: 22
     user: admin
     key_env: PROD_SSH_KEY_PATH
   staging:
-    host: 10.0.0.2
+    host: 192.0.2.12
     port: 2222
     user: deploy
     password_env: STAGING_SSH_PASSWORD
@@ -190,7 +190,7 @@ def test_load_config_returns_dict_of_server_configs(config_dir):
 def test_server_config_fields(config_dir):
     servers = load_config(config_dir)
     prod = servers["prod"]
-    assert prod.host == "10.0.0.1"
+    assert prod.host == "192.0.2.11"
     assert prod.port == 22
     assert prod.user == "admin"
     assert prod.key_path == "/keys/prod_key"
@@ -200,7 +200,7 @@ def test_server_config_fields(config_dir):
 def test_server_config_password_auth(config_dir):
     servers = load_config(config_dir)
     staging = servers["staging"]
-    assert staging.host == "10.0.0.2"
+    assert staging.host == "192.0.2.12"
     assert staging.port == 2222
     assert staging.password == "secret123"
     assert staging.key_path is None
@@ -216,7 +216,7 @@ def test_server_config_default_port(tmp_path):
     servers_yaml.write_text("""
 servers:
   minimal:
-    host: 10.0.0.3
+    host: 192.0.2.13
     user: root
 """)
     (tmp_path / ".env").write_text("")
@@ -234,7 +234,7 @@ Empty for now — fixtures live in test files or will be added as needed.
 
 - [ ] **Step 3: Run tests to verify they fail**
 
-Run: `cd D:/AI/AgenSysAdmin && .venv/Scripts/python -m pytest tests/test_config.py -v`
+Run: `cd /path/to/agensysadmin && .venv/Scripts/python -m pytest tests/test_config.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'agensysadmin.config'`
 
 - [ ] **Step 4: Implement config module**
@@ -302,7 +302,7 @@ def load_config(base_path: Path | str) -> dict[str, ServerConfig]:
 
 - [ ] **Step 5: Run tests to verify they pass**
 
-Run: `cd D:/AI/AgenSysAdmin && .venv/Scripts/python -m pytest tests/test_config.py -v`
+Run: `cd /path/to/agensysadmin && .venv/Scripts/python -m pytest tests/test_config.py -v`
 Expected: all 5 tests PASS
 
 - [ ] **Step 6: Commit**
@@ -334,7 +334,7 @@ from agensysadmin.ssh_manager import SSHManager, CommandResult
 def server_config():
     return ServerConfig(
         name="test",
-        host="10.0.0.1",
+        host="192.0.2.11",
         port=22,
         user="admin",
         key_path="/keys/test_key",
@@ -345,7 +345,7 @@ def server_config():
 def password_config():
     return ServerConfig(
         name="test-pw",
-        host="10.0.0.2",
+        host="192.0.2.12",
         port=22,
         user="admin",
         password="secret",
@@ -385,7 +385,7 @@ class TestSSHManager:
 
         mock_client.set_missing_host_key_policy.assert_called_once()
         mock_client.connect.assert_called_once_with(
-            hostname="10.0.0.1",
+            hostname="192.0.2.11",
             port=22,
             username="admin",
             key_filename="/keys/test_key",
@@ -402,7 +402,7 @@ class TestSSHManager:
         manager.connect(password_config)
 
         mock_client.connect.assert_called_once_with(
-            hostname="10.0.0.2",
+            hostname="192.0.2.12",
             port=22,
             username="admin",
             key_filename=None,
@@ -476,7 +476,7 @@ class TestSSHManager:
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd D:/AI/AgenSysAdmin && .venv/Scripts/python -m pytest tests/test_ssh_manager.py -v`
+Run: `cd /path/to/agensysadmin && .venv/Scripts/python -m pytest tests/test_ssh_manager.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'agensysadmin.ssh_manager'`
 
 - [ ] **Step 3: Implement SSH manager**
@@ -578,7 +578,7 @@ class SSHManager:
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd D:/AI/AgenSysAdmin && .venv/Scripts/python -m pytest tests/test_ssh_manager.py -v`
+Run: `cd /path/to/agensysadmin && .venv/Scripts/python -m pytest tests/test_ssh_manager.py -v`
 Expected: all 8 tests PASS
 
 - [ ] **Step 5: Commit**
@@ -639,7 +639,7 @@ def test_execute_command_failed(mock_ssh):
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd D:/AI/AgenSysAdmin && .venv/Scripts/python -m pytest tests/test_tools_general.py -v`
+Run: `cd /path/to/agensysadmin && .venv/Scripts/python -m pytest tests/test_tools_general.py -v`
 Expected: FAIL — `ModuleNotFoundError`
 
 - [ ] **Step 3: Implement general tools**
@@ -663,7 +663,7 @@ def execute_command_impl(
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd D:/AI/AgenSysAdmin && .venv/Scripts/python -m pytest tests/test_tools_general.py -v`
+Run: `cd /path/to/agensysadmin && .venv/Scripts/python -m pytest tests/test_tools_general.py -v`
 Expected: all 3 tests PASS
 
 - [ ] **Step 5: Commit**
@@ -851,7 +851,7 @@ class TestProcessList:
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd D:/AI/AgenSysAdmin && .venv/Scripts/python -m pytest tests/test_tools_monitoring.py -v`
+Run: `cd /path/to/agensysadmin && .venv/Scripts/python -m pytest tests/test_tools_monitoring.py -v`
 Expected: FAIL — `ModuleNotFoundError`
 
 - [ ] **Step 3: Implement monitoring tools**
@@ -995,7 +995,7 @@ def process_list_impl(
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd D:/AI/AgenSysAdmin && .venv/Scripts/python -m pytest tests/test_tools_monitoring.py -v`
+Run: `cd /path/to/agensysadmin && .venv/Scripts/python -m pytest tests/test_tools_monitoring.py -v`
 Expected: all tests PASS
 
 Note: some tests may need minor adjustments based on exact parsing. Fix any parsing mismatches in the implementation — the test fixtures define the expected behavior, the parsing code adapts to match.
@@ -1129,7 +1129,7 @@ mcp.run()
 
 - [ ] **Step 3: Verify server starts without errors**
 
-Run: `cd D:/AI/AgenSysAdmin && .venv/Scripts/python -c "from agensysadmin.server import mcp; print('Server module loads OK')" `
+Run: `cd /path/to/agensysadmin && .venv/Scripts/python -c "from agensysadmin.server import mcp; print('Server module loads OK')" `
 Expected: `Server module loads OK`
 
 - [ ] **Step 4: Commit**
@@ -1179,7 +1179,7 @@ def test_all_tools_registered():
 
 - [ ] **Step 2: Run all tests**
 
-Run: `cd D:/AI/AgenSysAdmin && .venv/Scripts/python -m pytest tests/ -v`
+Run: `cd /path/to/agensysadmin && .venv/Scripts/python -m pytest tests/ -v`
 Expected: all tests PASS
 
 - [ ] **Step 3: Write README.md**
@@ -1213,7 +1213,7 @@ Add to your Claude Code MCP settings:
     "sysadmin": {
       "command": "python",
       "args": ["-m", "agensysadmin"],
-      "cwd": "D:/AI/AgenSysAdmin"
+      "cwd": "/path/to/agensysadmin"
     }
   }
 }
@@ -1240,7 +1240,7 @@ pytest tests/ -v
 
 - [ ] **Step 4: Run full test suite one final time**
 
-Run: `cd D:/AI/AgenSysAdmin && .venv/Scripts/python -m pytest tests/ -v`
+Run: `cd /path/to/agensysadmin && .venv/Scripts/python -m pytest tests/ -v`
 Expected: all tests PASS
 
 - [ ] **Step 5: Commit**

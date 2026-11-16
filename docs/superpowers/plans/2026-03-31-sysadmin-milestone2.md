@@ -91,7 +91,7 @@ class TestInstallPackage:
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd D:/AI/AgenSysAdmin && .venv/Scripts/python -m pytest tests/test_tools_management.py::TestInstallPackage -v`
+Run: `cd /path/to/agensysadmin && .venv/Scripts/python -m pytest tests/test_tools_management.py::TestInstallPackage -v`
 Expected: FAIL — ModuleNotFoundError
 
 - [ ] **Step 3: Implement install_package_impl**
@@ -129,13 +129,13 @@ def install_package_impl(
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd D:/AI/AgenSysAdmin && .venv/Scripts/python -m pytest tests/test_tools_management.py::TestInstallPackage -v`
+Run: `cd /path/to/agensysadmin && .venv/Scripts/python -m pytest tests/test_tools_management.py::TestInstallPackage -v`
 Expected: all 4 tests PASS
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd D:/AI/AgenSysAdmin && git add src/agensysadmin/tools/management.py tests/test_tools_management.py && git commit -m "feat: add install_package tool"
+cd /path/to/agensysadmin && git add src/agensysadmin/tools/management.py tests/test_tools_management.py && git commit -m "feat: add install_package tool"
 ```
 
 ---
@@ -217,7 +217,7 @@ class TestManageService:
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd D:/AI/AgenSysAdmin && .venv/Scripts/python -m pytest tests/test_tools_management.py::TestManageService -v`
+Run: `cd /path/to/agensysadmin && .venv/Scripts/python -m pytest tests/test_tools_management.py::TestManageService -v`
 Expected: FAIL — ImportError
 
 - [ ] **Step 3: Implement manage_service_impl**
@@ -254,13 +254,13 @@ def manage_service_impl(
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd D:/AI/AgenSysAdmin && .venv/Scripts/python -m pytest tests/test_tools_management.py::TestManageService -v`
+Run: `cd /path/to/agensysadmin && .venv/Scripts/python -m pytest tests/test_tools_management.py::TestManageService -v`
 Expected: all 7 tests PASS
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd D:/AI/AgenSysAdmin && git add src/agensysadmin/tools/management.py tests/test_tools_management.py && git commit -m "feat: add manage_service tool"
+cd /path/to/agensysadmin && git add src/agensysadmin/tools/management.py tests/test_tools_management.py && git commit -m "feat: add manage_service tool"
 ```
 
 ---
@@ -352,7 +352,7 @@ class TestEditConfig:
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd D:/AI/AgenSysAdmin && .venv/Scripts/python -m pytest tests/test_tools_management.py::TestEditConfig -v`
+Run: `cd /path/to/agensysadmin && .venv/Scripts/python -m pytest tests/test_tools_management.py::TestEditConfig -v`
 Expected: FAIL — ImportError
 
 - [ ] **Step 3: Implement edit_config_impl**
@@ -400,13 +400,13 @@ def edit_config_impl(
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd D:/AI/AgenSysAdmin && .venv/Scripts/python -m pytest tests/test_tools_management.py::TestEditConfig -v`
+Run: `cd /path/to/agensysadmin && .venv/Scripts/python -m pytest tests/test_tools_management.py::TestEditConfig -v`
 Expected: all 5 tests PASS
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd D:/AI/AgenSysAdmin && git add src/agensysadmin/tools/management.py tests/test_tools_management.py && git commit -m "feat: add edit_config tool"
+cd /path/to/agensysadmin && git add src/agensysadmin/tools/management.py tests/test_tools_management.py && git commit -m "feat: add edit_config tool"
 ```
 
 ---
@@ -474,11 +474,11 @@ In `tests/test_server_integration.py`, update the expected tools set to include 
 
 - [ ] **Step 3: Run full test suite**
 
-Run: `cd D:/AI/AgenSysAdmin && .venv/Scripts/python -m pytest tests/ -v`
+Run: `cd /path/to/agensysadmin && .venv/Scripts/python -m pytest tests/ -v`
 Expected: all tests PASS (existing 27 + new 16 = ~43 tests)
 
 - [ ] **Step 4: Commit**
 
 ```bash
-cd D:/AI/AgenSysAdmin && git add src/agensysadmin/server.py tests/test_server_integration.py && git commit -m "feat: wire install_package, manage_service, edit_config into MCP server"
+cd /path/to/agensysadmin && git add src/agensysadmin/server.py tests/test_server_integration.py && git commit -m "feat: wire install_package, manage_service, edit_config into MCP server"
 ```
