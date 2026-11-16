@@ -1,4 +1,7 @@
 import pytest
+import paramiko
+from collections import deque
+from dataclasses import replace
 from unittest.mock import MagicMock, patch, AsyncMock
 from agensysadmin.config import ServerConfig
 from agensysadmin.ssh_manager import SSHManager, CommandResult
@@ -65,6 +68,11 @@ class TestSSHManager:
             key_filename="/keys/test_key",
             password=None,
             timeout=10,
+            banner_timeout=10,
+            auth_timeout=10,
+            channel_timeout=10,
+            allow_agent=False,
+            look_for_keys=False,
         )
 
     @patch("agensysadmin.ssh_manager.paramiko.SSHClient")
@@ -82,6 +90,11 @@ class TestSSHManager:
             key_filename=None,
             password="secret",
             timeout=10,
+            banner_timeout=10,
+            auth_timeout=10,
+            channel_timeout=10,
+            allow_agent=False,
+            look_for_keys=False,
         )
 
     @patch("agensysadmin.ssh_manager.paramiko.SSHClient")
@@ -91,7 +104,7 @@ class TestSSHManager:
 
         mock_stdout = MagicMock()
         mock_stdout.read.return_value = b"hello world\n"
-        mock_stdout.channel.recv_exit_status.return_value = 0
+        mock_stdout.channel = FakeChannel([b"hello world\n"])
         mock_stderr = MagicMock()
         mock_stderr.read.return_value = b""
         mock_client.exec_command.return_value = (MagicMock(), mock_stdout, mock_stderr)
@@ -146,3 +159,158 @@ class TestSSHManager:
         assert manager.is_connected(server_config.name) is False
         manager.connect(server_config)
         assert manager.is_connected(server_config.name) is True
+
+
+class FakeChannel:
+    """Small deterministic channel that requires output draining before exit status."""
+    def __init__(self, stdout=(), stderr=(), finished=True):
+        self.output = deque(stdout)
+        self.errors = deque(stderr)
+        self.finished = finished
+        self.closed = False
+
+    def recv_ready(self):
+        return bool(self.output)
+
+    def recv(self, _size):
+        return self.output.popleft()
+
+    def recv_stderr_ready(self):
+        return bool(self.errors)
+
+    def recv_stderr(self, _size):
+        return self.errors.popleft()
+
+    def exit_status_ready(self):
+        return self.finished
+
+    def recv_exit_status(self):
+        assert not self.output and not self.errors, "Exit status requested before draining output"
+        return 0
+
+    def close(self):
+        self.closed = True
+
+
+@pytest.fixture
+def connected_manager(server_config):
+    client = MagicMock()
+    manager = SSHManager()
+    manager._connections[server_config.name] = client
+    return manager, client
+
+
+def command_streams(client, channel):
+    stdin, stdout, stderr = MagicMock(), MagicMock(), MagicMock()
+    stdout.channel = channel
+    client.exec_command.return_value = stdin, stdout, stderr
+    return stdin, stdout, stderr
+
+
+def test_verifies_host_keys_and_disables_implicit_auth(server_config):
+    with patch("agensysadmin.ssh_manager.paramiko.SSHClient") as cls:
+        client = cls.return_value
+        SSHManager().connect(server_config)
+        client.load_system_host_keys.assert_called_once_with()
+        policy = client.set_missing_host_key_policy.call_args.args[0]
+        assert isinstance(policy, paramiko.RejectPolicy)
+        with pytest.raises(paramiko.SSHException):
+            policy.missing_host_key(client, "unknown.invalid", paramiko.RSAKey.generate(1024))
+
+
+def test_custom_trust_file_is_exclusive(server_config):
+    with patch("agensysadmin.ssh_manager.paramiko.SSHClient") as cls:
+        SSHManager().connect(replace(server_config, known_hosts_path="trusted_hosts"))
+        cls.return_value.load_host_keys.assert_called_once_with("trusted_hosts")
+        cls.return_value.load_system_host_keys.assert_not_called()
+
+
+@pytest.mark.parametrize("error", [paramiko.SSHException("unknown host"), paramiko.AuthenticationException("denied")])
+def test_failed_connection_is_closed_and_not_cached(server_config, error):
+    with patch("agensysadmin.ssh_manager.paramiko.SSHClient") as cls:
+        cls.return_value.connect.side_effect = error
+        manager = SSHManager()
+        with pytest.raises(type(error)):
+            manager.connect(server_config)
+        cls.return_value.close.assert_called_once()
+        assert not manager._connections
+
+
+def test_changed_configuration_reconnects(server_config):
+    with patch("agensysadmin.ssh_manager.paramiko.SSHClient") as cls:
+        manager = SSHManager()
+        manager.connect(server_config)
+        manager.connect(replace(server_config, host="new.invalid"))
+        assert cls.return_value.connect.call_count == 2
+        cls.return_value.close.assert_called_once()
+
+
+def test_drains_both_streams_and_replaces_invalid_utf8(connected_manager):
+    manager, client = connected_manager
+    channel = FakeChannel([b"hello", b"\xff"], [b"warning", b"!"])
+    streams = command_streams(client, channel)
+    result = manager.execute("test", "diagnostic")
+    assert result.stdout == "hello\ufffd"
+    assert result.stderr == "warning!"
+    assert channel.closed
+    for stream in streams:
+        stream.close.assert_called_once()
+
+
+def test_output_limit_closes_channel(connected_manager):
+    manager, client = connected_manager
+    manager.max_output_bytes = 4
+    channel = FakeChannel([b"123"], [b"45"])
+    command_streams(client, channel)
+    with pytest.raises(ValueError, match="output exceeded"):
+        manager.execute("test", "verbose")
+    assert channel.closed
+
+
+def test_stalled_command_has_deadline(connected_manager, monkeypatch):
+    manager, client = connected_manager
+    channel = FakeChannel(finished=False)
+    command_streams(client, channel)
+    clock = iter([0, 2])
+    monkeypatch.setattr("agensysadmin.ssh_manager.time.monotonic", lambda: next(clock))
+    with pytest.raises(TimeoutError, match="completion is unknown"):
+        manager.execute("test", "stalled", timeout=1)
+    assert channel.closed
+
+
+@pytest.mark.parametrize("timeout", [0, -1, 301, True, float("nan"), float("inf")])
+def test_invalid_timeout_rejected_before_execution(connected_manager, timeout):
+    manager, client = connected_manager
+    with pytest.raises(ValueError, match="timeout"):
+        manager.execute("test", "uname", timeout=timeout)
+    client.exec_command.assert_not_called()
+
+
+def test_secret_input_is_sent_over_stdin_only(connected_manager):
+    manager, client = connected_manager
+    channel = FakeChannel()
+    stdin, _, _ = command_streams(client, channel)
+    manager.execute("test", "write-config", input_data=b"API_TOKEN=secret\n")
+    assert client.exec_command.call_args.args[0] == "write-config"
+    stdin.write.assert_called_once_with(b"API_TOKEN=secret\n")
+    stdin.flush.assert_called_once()
+    stdin.close.assert_called_once()
+
+
+def test_failed_stdin_write_closes_channel(connected_manager):
+    manager, client = connected_manager
+    channel = FakeChannel()
+    stdin, _, _ = command_streams(client, channel)
+    stdin.write.side_effect = OSError("channel closed")
+    with pytest.raises(OSError):
+        manager.execute("test", "write-config", input_data=b"test")
+    assert channel.closed
+    stdin.close.assert_called_once()
+
+
+@pytest.mark.parametrize("data", ["not-bytes", b"a" * (256 * 1024 + 1)])
+def test_invalid_input_rejected_before_execution(connected_manager, data):
+    manager, client = connected_manager
+    with pytest.raises(ValueError, match="input_data"):
+        manager.execute("test", "write-config", input_data=data)
+    client.exec_command.assert_not_called()

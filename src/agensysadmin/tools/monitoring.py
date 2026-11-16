@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 
 from agensysadmin.ssh_manager import SSHManager
+from agensysadmin.validation import shell_quote, validate_service_name
 
 
 def system_info_impl(ssh: SSHManager, server: str) -> dict:
@@ -72,7 +73,8 @@ def check_services_impl(
     if services:
         result_services = {}
         for svc in services:
-            output = ssh.execute(server, f"systemctl status {svc}")
+            svc = validate_service_name(svc)
+            output = ssh.execute(server, f"systemctl status --no-pager -- {shell_quote(svc)}")
             active = "active (running)" in output.stdout
             result_services[svc] = {
                 "active": active,
@@ -112,6 +114,8 @@ def check_ports_impl(ssh: SSHManager, server: str) -> dict:
 def process_list_impl(
     ssh: SSHManager, server: str, sort_by: str = "cpu"
 ) -> dict:
+    if sort_by not in {"cpu", "memory"}:
+        raise ValueError("sort_by must be 'cpu' or 'memory'")
     # Use ps with custom output format: pid, user, %cpu, %mem, rss, command
     # Sort flag: k-%cpu (descending) or k-%mem (descending) — note: ps k sorts ascending,
     # so we use --sort=-%cpu for descending CPU order.

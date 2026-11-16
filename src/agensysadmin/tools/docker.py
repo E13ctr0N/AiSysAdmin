@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from agensysadmin.ssh_manager import SSHManager
+from agensysadmin.validation import shell_quote, validate_absolute_path, validate_container_name
 
 VALID_COMPOSE_ACTIONS = {"up", "down", "restart", "stop", "start", "ps", "logs", "pull", "build"}
 
@@ -48,9 +49,15 @@ def docker_logs_impl(
     container: str,
     tail: int | None = None,
 ) -> dict:
-    cmd = f"docker logs {container}"
+    container = validate_container_name(container)
+    cmd = "docker logs"
     if tail is not None:
+        if not isinstance(tail, int) or isinstance(tail, bool) or not 0 <= tail <= 10_000:
+            raise ValueError("tail must be an integer between 0 and 10000")
         cmd += f" --tail {tail}"
+    else:
+        cmd += " --tail 100"
+    cmd += f" -- {shell_quote(container)}"
     result = ssh.execute(server, cmd)
     return {
         "success": result.exit_code == 0,
@@ -94,8 +101,11 @@ def docker_compose_impl(
         raise ValueError(
             f"Invalid action '{action}'. Must be one of: {sorted(VALID_COMPOSE_ACTIONS)}"
         )
+    path = validate_absolute_path(path)
     action_cmd = f"{action} -d" if action == "up" else action
-    cmd = f"cd {path} && docker compose {action_cmd}"
+    # `ps` and `logs` are read-only Compose subcommands; neither starts services
+    # or runs lifecycle hooks.
+    cmd = f"cd -- {shell_quote(path)} && docker compose {action_cmd}"
     result = ssh.execute(server, cmd, timeout=120)
     return {
         "success": result.exit_code == 0,

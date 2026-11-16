@@ -22,6 +22,10 @@ class TestCreateBackup:
         assert "tar" in tar_cmd
         assert "/etc" in tar_cmd
         assert "/backups" in tar_cmd
+        assert "sudo -n sh -c" in tar_cmd
+        assert "umask 077" in tar_cmd
+        assert "set -C" in tar_cmd
+        assert "tar czf -" in tar_cmd
 
     def test_backup_failure(self, mock_ssh):
         mock_ssh.execute.side_effect = [
@@ -46,9 +50,9 @@ class TestListBackups:
     def test_list_backups(self, mock_ssh):
         mock_ssh.execute.return_value = CommandResult(
             stdout=(
-                "-rw-r--r-- 1 root root  15M Mar 30 10:00 /backups/etc-20260330-100000.tar.gz\n"
-                "-rw-r--r-- 1 root root 120M Mar 31 02:00 /backups/www-20260331-020000.tar.gz\n"
-                "-rw-r--r-- 1 root root 500M Mar 31 12:00 /backups/db-20260331-120000.tar.gz\n"
+                "15728640\t2026-03-30 10:00\t/backups/etc-20260330-100000.tar.gz\n"
+                "125829120\t2026-03-31 02:00\t/backups/www-20260331-020000.tar.gz\n"
+                "524288000\t2026-03-31 12:00\t/backups/db-20260331-120000.tar.gz\n"
             ),
             stderr="", exit_code=0, duration_ms=50,
         )
@@ -56,7 +60,7 @@ class TestListBackups:
         assert result["success"] is True
         assert len(result["backups"]) == 3
         assert result["backups"][0]["name"] == "etc-20260330-100000.tar.gz"
-        assert result["backups"][0]["size"] == "15M"
+        assert result["backups"][0]["size"] == "15728640"
 
     def test_list_backups_empty(self, mock_ssh):
         mock_ssh.execute.return_value = CommandResult(
@@ -72,6 +76,11 @@ class TestListBackups:
         )
         result = list_backups_impl(mock_ssh, "prod", path="/backups")
         assert result["success"] is False
+
+    def test_list_backups_silent_command_failure_is_not_success(self, mock_ssh):
+        mock_ssh.execute.return_value = CommandResult(stdout="", stderr="", exit_code=1, duration_ms=20)
+        result = list_backups_impl(mock_ssh, "prod", path="/backups")
+        assert result == {"success": False, "exit_code": 1, "stderr": "", "backups": []}
 
 
 class TestCheckCron:
@@ -109,3 +118,33 @@ class TestCheckCron:
         result = check_cron_impl(mock_ssh, "prod", user="www-data")
         cmd = mock_ssh.execute.call_args_list[0].args[1]
         assert "www-data" in cmd
+
+    @pytest.mark.parametrize("value", ["relative", "/backups\nnext"])
+    def test_backup_paths_must_be_safe_absolute_paths(self, mock_ssh, value):
+        with pytest.raises(ValueError):
+            create_backup_impl(mock_ssh, "prod", source="/etc", dest_dir=value)
+        mock_ssh.execute.assert_not_called()
+
+    def test_backup_quotes_shell_metacharacters_in_path(self, mock_ssh):
+        mock_ssh.execute.side_effect = [
+            CommandResult(stdout="", stderr="", exit_code=0, duration_ms=1),
+            CommandResult(stdout="", stderr="tar failed", exit_code=1, duration_ms=1),
+        ]
+        create_backup_impl(mock_ssh, "prod", source="/etc;id", dest_dir="/backups")
+        assert "'/etc;id'" in mock_ssh.execute.call_args_list[1].args[1]
+
+    @pytest.mark.parametrize("name", ["../../etc/passwd", "backup;id", "$(id)"])
+    def test_backup_name_must_be_single_safe_component(self, mock_ssh, name):
+        with pytest.raises(ValueError, match="backup name"):
+            create_backup_impl(mock_ssh, "prod", source="/etc", dest_dir="/backups", name=name)
+
+    def test_mkdir_failure_does_not_run_tar(self, mock_ssh):
+        mock_ssh.execute.return_value = CommandResult(stdout="", stderr="permission denied", exit_code=1, duration_ms=1)
+        result = create_backup_impl(mock_ssh, "prod", source="/etc", dest_dir="/backups")
+        assert result["success"] is False
+        assert mock_ssh.execute.call_count == 1
+
+    def test_cron_rejects_user_injection(self, mock_ssh):
+        with pytest.raises(ValueError, match="user name"):
+            check_cron_impl(mock_ssh, "prod", user="root;id")
+        mock_ssh.execute.assert_not_called()

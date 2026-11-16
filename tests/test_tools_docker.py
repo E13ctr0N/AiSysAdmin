@@ -71,6 +71,22 @@ class TestDockerLogs:
         result = docker_logs_impl(mock_ssh, "prod", container="web", tail=10)
         assert "--tail 10" in mock_ssh.execute.call_args.args[1]
 
+    @pytest.mark.parametrize("container", ["web;id", "--tail", "$(id)"])
+    def test_docker_logs_rejects_container_injection(self, mock_ssh, container):
+        with pytest.raises(ValueError, match="container name"):
+            docker_logs_impl(mock_ssh, "prod", container=container)
+        mock_ssh.execute.assert_not_called()
+
+    @pytest.mark.parametrize("tail", [-1, 10_001, "10", True])
+    def test_docker_logs_bounds_tail(self, mock_ssh, tail):
+        with pytest.raises(ValueError, match="tail"):
+            docker_logs_impl(mock_ssh, "prod", container="web", tail=tail)
+
+    def test_docker_logs_default_is_bounded(self, mock_ssh):
+        mock_ssh.execute.return_value = CommandResult(stdout="", stderr="", exit_code=0, duration_ms=1)
+        docker_logs_impl(mock_ssh, "prod", container="web")
+        assert "--tail 100" in mock_ssh.execute.call_args.args[1]
+
     def test_docker_logs_container_not_found(self, mock_ssh):
         mock_ssh.execute.return_value = CommandResult(
             stdout="", stderr="Error: No such container: missing\n",
@@ -125,6 +141,24 @@ class TestDockerCompose:
         )
         result = docker_compose_impl(mock_ssh, "prod", action="up", path="/opt/missing")
         assert result["success"] is False
+
+    @pytest.mark.parametrize("path", ["relative", "/opt/app\nnext"])
+    def test_compose_rejects_unsafe_path(self, mock_ssh, path):
+        with pytest.raises(ValueError):
+            docker_compose_impl(mock_ssh, "prod", action="ps", path=path)
+        mock_ssh.execute.assert_not_called()
+
+    def test_compose_quotes_shell_metacharacters_in_path(self, mock_ssh):
+        mock_ssh.execute.return_value = CommandResult(stdout="", stderr="", exit_code=0, duration_ms=1)
+        docker_compose_impl(mock_ssh, "prod", action="ps", path="/opt/app;id")
+        assert "'/opt/app;id'" in mock_ssh.execute.call_args.args[1]
+
+    def test_compose_quotes_path_with_spaces(self, mock_ssh):
+        mock_ssh.execute.return_value = CommandResult(stdout="", stderr="", exit_code=0, duration_ms=1)
+        docker_compose_impl(mock_ssh, "prod", action="ps", path="/opt/my app")
+        command = mock_ssh.execute.call_args.args[1]
+        assert "cd -- '/opt/my app'" in command
+        assert "docker compose ps" in command
 
 
 class TestDockerImages:

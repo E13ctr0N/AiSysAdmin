@@ -4,9 +4,18 @@ servers:
     port: 22
     user: admin
     key_env: PROD_SSH_KEY_PATH
+    # Verify the host key independently before enrolling it in this trust file.
+    known_hosts_path: ~/.ssh/known_hosts
+    allow_mutations: false
+    allow_arbitrary_commands: false
+    allow_agent: false
+    look_for_keys: false
 
   staging:
     host: 192.168.1.20
     port: 2222
     user: deploy
     key_env: STAGING_SSH_KEY_PATH
+    known_hosts_path: ~/.ssh/known_hosts
+    allow_mutations: false
+    allow_arbitrary_commands: false

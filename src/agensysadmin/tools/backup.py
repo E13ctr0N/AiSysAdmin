@@ -1,6 +1,14 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from agensysadmin.ssh_manager import SSHManager
+from agensysadmin.validation import (
+    shell_quote,
+    validate_absolute_path,
+    validate_backup_name,
+    validate_user_name,
+)
 
 
 def create_backup_impl(
@@ -10,16 +18,32 @@ def create_backup_impl(
     dest_dir: str,
     name: str | None = None,
 ) -> dict:
-    ssh.execute(server, f"sudo mkdir -p {dest_dir}")
+    source = validate_absolute_path(source, "source")
+    dest_dir = validate_absolute_path(dest_dir, "dest_dir")
+    requested_name = validate_backup_name(name) if name is not None else None
+    mkdir_result = ssh.execute(server, f"sudo -n mkdir -p -- {shell_quote(dest_dir)}")
+    if mkdir_result.exit_code != 0:
+        return {
+            "success": False,
+            "exit_code": mkdir_result.exit_code,
+            "stderr": mkdir_result.stderr,
+            "source": source,
+        }
 
-    if name:
-        filename = f"{name}.tar.gz"
+    if requested_name is not None:
+        filename = f"{requested_name}.tar.gz"
     else:
         basename = source.strip("/").replace("/", "-")
-        filename = f"{basename}-$(date +%Y%m%d-%H%M%S).tar.gz"
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+        filename = f"{basename}-{timestamp}.tar.gz"
 
     dest_path = f"{dest_dir}/{filename}"
-    result = ssh.execute(server, f"sudo tar czf {dest_path} {source}", timeout=300)
+    archive_script = 'umask 077; set -C; exec tar czf - -- "$1" > "$2"'
+    result = ssh.execute(
+        server,
+        f"sudo -n sh -c {shell_quote(archive_script)} sh {shell_quote(source)} {shell_quote(dest_path)}",
+        timeout=300,
+    )
 
     if result.exit_code != 0:
         return {
@@ -29,7 +53,7 @@ def create_backup_impl(
             "source": source,
         }
 
-    size_result = ssh.execute(server, f"ls -lh {dest_path}")
+    size_result = ssh.execute(server, f"sudo -n ls -lh -- {shell_quote(dest_path)}")
     size = ""
     if size_result.stdout.strip():
         parts = size_result.stdout.strip().split()
@@ -50,9 +74,10 @@ def list_backups_impl(
     server: str,
     path: str,
 ) -> dict:
-    result = ssh.execute(server, f"ls -lh {path}/*.tar.gz 2>/dev/null")
+    path = validate_absolute_path(path)
+    result = ssh.execute(server, f"find {shell_quote(path)} -maxdepth 1 -type f -name '*.tar.gz' -printf '%s\\t%TY-%Tm-%Td %TH:%TM\\t%p\\n'")
 
-    if result.exit_code != 0 and result.stderr.strip():
+    if result.exit_code != 0:
         return {
             "success": False,
             "exit_code": result.exit_code,
@@ -64,14 +89,14 @@ def list_backups_impl(
     for line in result.stdout.strip().split("\n"):
         if not line.strip():
             continue
-        parts = line.split()
-        if len(parts) >= 9:
-            full_path = parts[-1]
+        parts = line.split("\t", 2)
+        if len(parts) == 3:
+            size_bytes, date, full_path = parts
             name = full_path.split("/")[-1]
             backups.append({
                 "name": name,
-                "size": parts[4],
-                "date": f"{parts[5]} {parts[6]} {parts[7]}",
+                "size": size_bytes,
+                "date": date,
                 "path": full_path,
             })
 
@@ -83,8 +108,8 @@ def check_cron_impl(
     server: str,
     user: str | None = None,
 ) -> dict:
-    user_flag = f"-u {user}" if user else ""
-    user_cron_result = ssh.execute(server, f"sudo crontab {user_flag} -l 2>/dev/null")
+    user_flag = f"-u {shell_quote(validate_user_name(user))}" if user else ""
+    user_cron_result = ssh.execute(server, f"sudo -n crontab {user_flag} -l 2>/dev/null")
 
     user_cron = []
     for line in user_cron_result.stdout.strip().split("\n"):
@@ -98,7 +123,7 @@ def check_cron_impl(
                 "command": parts[5],
             })
 
-    system_cron_result = ssh.execute(server, "sudo cat /etc/cron.d/* 2>/dev/null")
+    system_cron_result = ssh.execute(server, "sudo -n cat /etc/cron.d/* 2>/dev/null")
 
     return {
         "success": True,

@@ -30,7 +30,6 @@ def mock_ssh():
 class TestCheckUpdates:
     def test_updates_available(self, mock_ssh):
         mock_ssh.execute.side_effect = [
-            CommandResult(stdout="", stderr="", exit_code=0, duration_ms=3000),
             CommandResult(
                 stdout=(
                     "Listing...\n"
@@ -50,7 +49,6 @@ class TestCheckUpdates:
 
     def test_no_updates(self, mock_ssh):
         mock_ssh.execute.side_effect = [
-            CommandResult(stdout="", stderr="", exit_code=0, duration_ms=3000),
             CommandResult(stdout="Listing...\n", stderr="", exit_code=0, duration_ms=1000),
         ]
         result = check_updates_impl(mock_ssh, "prod")
@@ -59,7 +57,6 @@ class TestCheckUpdates:
 
     def test_security_updates_only(self, mock_ssh):
         mock_ssh.execute.side_effect = [
-            CommandResult(stdout="", stderr="", exit_code=0, duration_ms=3000),
             CommandResult(
                 stdout=(
                     "Listing...\n"
@@ -120,14 +117,7 @@ class TestFirewallStatus:
 
 class TestSecurityAudit:
     def test_security_audit_runs_all_checks(self, mock_ssh):
-        mock_ssh.execute.side_effect = [
-            CommandResult(stdout="PermitRootLogin no\n", stderr="", exit_code=0, duration_ms=20),
-            CommandResult(stdout="PasswordAuthentication no\n", stderr="", exit_code=0, duration_ms=20),
-            CommandResult(stdout="/etc/apt/apt.conf.d/20auto-upgrades\n", stderr="", exit_code=0, duration_ms=20),
-            CommandResult(stdout="42\n", stderr="", exit_code=0, duration_ms=30),
-            CommandResult(stdout="root\n", stderr="", exit_code=0, duration_ms=20),
-            CommandResult(stdout="", stderr="", exit_code=0, duration_ms=100),
-        ]
+        mock_ssh.execute.side_effect = [CommandResult(stdout='PermitRootLogin no\nPasswordAuthentication no\n', stderr="", exit_code=0, duration_ms=10) , CommandResult(stdout="present", stderr="", exit_code=0, duration_ms=20), CommandResult(stdout="42\n", stderr="", exit_code=0, duration_ms=30), CommandResult(stdout="root\n", stderr="", exit_code=0, duration_ms=20), CommandResult(stdout="", stderr="", exit_code=0, duration_ms=100)]
         result = security_audit_impl(mock_ssh, "prod")
         assert result["success"] is True
         assert result["checks"]["ssh"]["root_login"] == "no"
@@ -138,14 +128,7 @@ class TestSecurityAudit:
         assert result["checks"]["world_writable"]["files"] == []
 
     def test_security_audit_finds_issues(self, mock_ssh):
-        mock_ssh.execute.side_effect = [
-            CommandResult(stdout="PermitRootLogin yes\n", stderr="", exit_code=0, duration_ms=20),
-            CommandResult(stdout="PasswordAuthentication yes\n", stderr="", exit_code=0, duration_ms=20),
-            CommandResult(stdout="", stderr="", exit_code=1, duration_ms=20),
-            CommandResult(stdout="1523\n", stderr="", exit_code=0, duration_ms=30),
-            CommandResult(stdout="root\nbackdoor\n", stderr="", exit_code=0, duration_ms=20),
-            CommandResult(stdout="/etc/shadow\n/etc/passwd\n", stderr="", exit_code=0, duration_ms=100),
-        ]
+        mock_ssh.execute.side_effect = [CommandResult(stdout='PermitRootLogin yes\nPasswordAuthentication yes\n', stderr="", exit_code=0, duration_ms=10) , CommandResult(stdout="absent", stderr="", exit_code=0, duration_ms=20), CommandResult(stdout="1523\n", stderr="", exit_code=0, duration_ms=30), CommandResult(stdout="root\nbackdoor\n", stderr="", exit_code=0, duration_ms=20), CommandResult(stdout="/etc/shadow\n/etc/passwd\n", stderr="", exit_code=0, duration_ms=100)]
         result = security_audit_impl(mock_ssh, "prod")
         assert result["checks"]["ssh"]["root_login"] == "yes"
         assert result["checks"]["ssh"]["password_auth"] == "yes"
@@ -231,14 +214,7 @@ class TestFormatReport:
 
 class TestAuditSSH:
     def test_secure_ssh_config(self, mock_ssh):
-        mock_ssh.execute.side_effect = [
-            CommandResult(stdout="PermitRootLogin no\n", stderr="", exit_code=0, duration_ms=10),
-            CommandResult(stdout="PasswordAuthentication no\n", stderr="", exit_code=0, duration_ms=10),
-            CommandResult(stdout="PubkeyAuthentication yes\n", stderr="", exit_code=0, duration_ms=10),
-            CommandResult(stdout="Port 2222\n", stderr="", exit_code=0, duration_ms=10),
-            CommandResult(stdout="MaxAuthTries 3\n", stderr="", exit_code=0, duration_ms=10),
-            CommandResult(stdout="AllowUsers admin deploy\n", stderr="", exit_code=0, duration_ms=10),
-        ]
+        mock_ssh.execute.side_effect = [CommandResult(stdout='PermitRootLogin no\nPasswordAuthentication no\nPubkeyAuthentication yes\nPort 2222\nMaxAuthTries 3\nAllowUsers admin deploy\n', stderr="", exit_code=0, duration_ms=10)]
         findings = _audit_ssh(mock_ssh, "prod")
         statuses = {f["check"]: f["status"] for f in findings}
         assert statuses["Root login"] == "PASS"
@@ -249,14 +225,7 @@ class TestAuditSSH:
         assert statuses["Access restrictions"] == "PASS"
 
     def test_insecure_ssh_config(self, mock_ssh):
-        mock_ssh.execute.side_effect = [
-            CommandResult(stdout="PermitRootLogin yes\n", stderr="", exit_code=0, duration_ms=10),
-            CommandResult(stdout="PasswordAuthentication yes\n", stderr="", exit_code=0, duration_ms=10),
-            CommandResult(stdout="PubkeyAuthentication no\n", stderr="", exit_code=0, duration_ms=10),
-            CommandResult(stdout="", stderr="", exit_code=1, duration_ms=10),
-            CommandResult(stdout="MaxAuthTries 6\n", stderr="", exit_code=0, duration_ms=10),
-            CommandResult(stdout="", stderr="", exit_code=1, duration_ms=10),
-        ]
+        mock_ssh.execute.side_effect = [CommandResult(stdout='PermitRootLogin yes\nPasswordAuthentication yes\nPubkeyAuthentication no\nMaxAuthTries 6\nport 22\n', stderr="", exit_code=0, duration_ms=10)]
         findings = _audit_ssh(mock_ssh, "prod")
         statuses = {f["check"]: f["severity"] for f in findings}
         assert statuses["Root login"] == "critical"
@@ -420,8 +389,6 @@ class TestAuditServices:
 class TestAuditUpdates:
     def test_up_to_date(self, mock_ssh):
         mock_ssh.execute.side_effect = [
-            CommandResult(stdout="", stderr="", exit_code=0, duration_ms=10),
-            CommandResult(stdout="Listing...\n", stderr="", exit_code=0, duration_ms=10),
             CommandResult(stdout="Listing...\n", stderr="", exit_code=0, duration_ms=10),
             CommandResult(stdout="5.15.0-91\n5.15.0-91\n", stderr="", exit_code=0, duration_ms=10),
             CommandResult(stdout="/etc/apt/apt.conf.d/20auto-upgrades\n", stderr="", exit_code=0, duration_ms=10),
@@ -435,13 +402,8 @@ class TestAuditUpdates:
 
     def test_outdated_system(self, mock_ssh):
         mock_ssh.execute.side_effect = [
-            CommandResult(stdout="", stderr="", exit_code=0, duration_ms=10),
             CommandResult(
-                stdout="Listing...\nlibssl3/jammy-updates 3.0.2 amd64\ncurl/jammy-updates 7.81 amd64\n",
-                stderr="", exit_code=0, duration_ms=10,
-            ),
-            CommandResult(
-                stdout="Listing...\nlibssl3/jammy-security 3.0.2 amd64\n",
+                stdout="Listing...\nlibssl3/jammy-security 3.0.2 amd64\ncurl/jammy-updates 7.81 amd64\n",
                 stderr="", exit_code=0, duration_ms=10,
             ),
             CommandResult(stdout="5.15.0-88\n5.15.0-91\n", stderr="", exit_code=0, duration_ms=10),
@@ -568,14 +530,7 @@ class TestFullSecurityAudit:
             CommandResult(stdout="1.2.3.4\n", stderr="", exit_code=0, duration_ms=10),
         ]
         # SSH: 6 commands
-        ssh_r = [
-            CommandResult(stdout="PermitRootLogin no\n", stderr="", exit_code=0, duration_ms=10),
-            CommandResult(stdout="PasswordAuthentication no\n", stderr="", exit_code=0, duration_ms=10),
-            CommandResult(stdout="PubkeyAuthentication yes\n", stderr="", exit_code=0, duration_ms=10),
-            CommandResult(stdout="Port 2222\n", stderr="", exit_code=0, duration_ms=10),
-            CommandResult(stdout="MaxAuthTries 3\n", stderr="", exit_code=0, duration_ms=10),
-            CommandResult(stdout="AllowUsers admin\n", stderr="", exit_code=0, duration_ms=10),
-        ]
+        ssh_r = [CommandResult(stdout='PermitRootLogin no\nPasswordAuthentication no\nPubkeyAuthentication yes\nPort 2222\nMaxAuthTries 3\nAllowUsers admin\n', stderr="", exit_code=0, duration_ms=10)]
         # Firewall: 2 (ufw found + status)
         fw_r = [
             CommandResult(stdout="/usr/sbin/ufw\n", stderr="", exit_code=0, duration_ms=10),
@@ -608,13 +563,7 @@ class TestFullSecurityAudit:
             CommandResult(stdout="", stderr="", exit_code=1, duration_ms=10),
         ]
         # Updates: 5
-        upd_r = [
-            CommandResult(stdout="", stderr="", exit_code=0, duration_ms=10),
-            CommandResult(stdout="Listing...\n", stderr="", exit_code=0, duration_ms=10),
-            CommandResult(stdout="Listing...\n", stderr="", exit_code=0, duration_ms=10),
-            CommandResult(stdout="6.1.0-43\n6.1.0-43\n", stderr="", exit_code=0, duration_ms=10),
-            CommandResult(stdout="/etc/apt/apt.conf.d/20auto-upgrades\n", stderr="", exit_code=0, duration_ms=10),
-        ]
+        upd_r = [CommandResult(stdout="Listing...\n", stderr="", exit_code=0, duration_ms=10), CommandResult(stdout="6.1.0-43\n6.1.0-43\n", stderr="", exit_code=0, duration_ms=10), CommandResult(stdout="/etc/apt/apt.conf.d/20auto-upgrades\n", stderr="", exit_code=0, duration_ms=10)]
         # Logs: 5
         log_r = [
             CommandResult(stdout="active\n", stderr="", exit_code=0, duration_ms=10),

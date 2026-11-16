@@ -69,3 +69,63 @@ servers:
     (tmp_path / ".env").write_text("")
     servers = load_config(tmp_path)
     assert servers["minimal"].port == 22
+
+
+def test_secure_defaults_and_secret_repr():
+    config = ServerConfig("test", "example.invalid", "admin", password="do-not-print")
+    assert config.allow_mutations is False
+    assert config.allow_arbitrary_commands is False
+    assert config.allow_agent is False
+    assert config.look_for_keys is False
+    assert "do-not-print" not in repr(config)
+
+
+@pytest.mark.parametrize("setting,value", [
+    ("allow_mutations", '"false"'),
+    ("allow_arbitrary_commands", '"true"'),
+    ("allow_agent", "1"),
+    ("look_for_keys", "null"),
+    ("port", "true"),
+    ("port", "0"),
+    ("port", "65536"),
+])
+def test_rejects_ambiguous_security_settings(tmp_path, setting, value):
+    (tmp_path / "servers.yaml").write_text(
+        f"servers:\n  test:\n    host: example.invalid\n    user: admin\n    {setting}: {value}\n")
+    with pytest.raises(ValueError):
+        load_config(tmp_path)
+
+
+def test_shell_permission_requires_mutation_permission(tmp_path):
+    (tmp_path / "servers.yaml").write_text(
+        "servers:\n  test:\n    host: example.invalid\n    user: admin\n    allow_arbitrary_commands: true\n")
+    with pytest.raises(ValueError, match="require allow_mutations"):
+        load_config(tmp_path)
+
+
+def test_env_is_not_overwritten_and_password_not_interpolated(tmp_path, monkeypatch):
+    monkeypatch.setenv("ADMIN_KEY_PATH", "/operator/key")
+    monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
+    (tmp_path / "servers.yaml").write_text(
+        "servers:\n  test:\n    host: example.invalid\n    user: admin\n"
+        "    key_env: ADMIN_KEY_PATH\n    password_env: ADMIN_PASSWORD\n")
+    (tmp_path / ".env").write_text("ADMIN_KEY_PATH=/project/key\nADMIN_PASSWORD='${ADMIN_KEY_PATH}'\n")
+    config = load_config(tmp_path)["test"]
+    assert config.key_path == "/operator/key"
+    assert config.password == "${ADMIN_KEY_PATH}"
+    assert os.environ["ADMIN_KEY_PATH"] == "/operator/key"
+    assert "ADMIN_PASSWORD" not in os.environ
+
+
+def test_missing_credential_fails_without_value_disclosure(tmp_path, monkeypatch):
+    monkeypatch.delenv("MISSING_ADMIN_KEY", raising=False)
+    (tmp_path / "servers.yaml").write_text(
+        "servers:\n  test:\n    host: example.invalid\n    user: admin\n    key_env: MISSING_ADMIN_KEY\n")
+    with pytest.raises(ValueError, match="missing or empty"):
+        load_config(tmp_path)
+
+
+def test_custom_known_hosts_resolves_relative_to_config(tmp_path):
+    (tmp_path / "servers.yaml").write_text(
+        "servers:\n  test:\n    host: example.invalid\n    user: admin\n    known_hosts_path: trusted_hosts\n")
+    assert load_config(tmp_path)["test"].known_hosts_path == str((tmp_path / "trusted_hosts").resolve())

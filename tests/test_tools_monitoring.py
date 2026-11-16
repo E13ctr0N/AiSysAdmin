@@ -115,6 +115,11 @@ class TestCheckServices:
         result = check_services_impl(mock_ssh, "prod", services=None)
         assert result["raw_output"] is not None
 
+    def test_check_services_rejects_injection(self, mock_ssh):
+        with pytest.raises(ValueError, match="service name"):
+            check_services_impl(mock_ssh, "prod", services=["nginx;id"])
+        mock_ssh.execute.assert_not_called()
+
 
 class TestCheckPorts:
     def test_check_ports(self, mock_ssh):
@@ -160,3 +165,7 @@ class TestProcessList:
 
         result = process_list_impl(mock_ssh, "prod", sort_by="memory")
         assert result["processes"][0]["mem_percent"] == 12.5
+
+    def test_process_list_rejects_unknown_sort(self, mock_ssh):
+        with pytest.raises(ValueError, match="sort_by"):
+            process_list_impl(mock_ssh, "prod", sort_by="cpu;id")
