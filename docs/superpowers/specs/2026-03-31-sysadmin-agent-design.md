@@ -49,13 +49,13 @@ agensysadmin/
 ```yaml
 servers:
   prod:
-    host: 192.168.1.10
+    host: 192.0.2.21
     port: 22
     user: admin
     key_env: PROD_SSH_KEY_PATH
 
   staging:
-    host: 192.168.1.20
+    host: 192.0.2.22
     port: 2222
     user: deploy
     key_env: STAGING_SSH_KEY_PATH
@@ -92,7 +92,7 @@ STAGING_SSH_KEY_PATH=/home/user/.ssh/staging_key
     "sysadmin": {
       "command": "python",
       "args": ["-m", "agensysadmin.server"],
-      "cwd": "D:/AI/AgenSysAdmin"
+      "cwd": "/path/to/agensysadmin"
     }
   }
 }
