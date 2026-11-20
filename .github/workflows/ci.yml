@@ -25,3 +25,12 @@ jobs:
       - run: pytest -q
       - run: python -m compileall -q src tests
       - run: pip check
+      - name: Build and smoke-test the installed wheel
+        shell: bash
+        run: |
+          python -m pip wheel --no-deps --wheel-dir "$RUNNER_TEMP/wheels" .
+          python -m venv "$RUNNER_TEMP/wheel-smoke"
+          "$RUNNER_TEMP/wheel-smoke/bin/python" -m pip install "$RUNNER_TEMP"/wheels/*.whl
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/wheel-smoke/bin/agensysadmin" --help
+          "$RUNNER_TEMP/wheel-smoke/bin/python" -m pip check
