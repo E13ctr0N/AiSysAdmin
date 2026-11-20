@@ -1,0 +1,27 @@
+name: Publish v0.2.0
+
+on:
+  push:
+    branches:
+      - codex/publish-v0-2-0
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    if: github.repository == 'E13ctr0N/AiSysAdmin'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Publish verified source revision
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_NOTES: |
+            - 27 MCP tools across 12 audit categories.
+            - SSH host-key verification and operator-controlled permissions for administration actions.
+            - Metadata-only audit history and checks for the public repository.
+            - CI builds and installs the wheel in a clean environment and verifies the CLI on Python 3.11 and 3.12.
+        run: |
+          printf '%s\n' "$RELEASE_NOTES" > "$RUNNER_TEMP/codex-release-notes.md"
+          gh release create 'v0.2.0' --repo "$GITHUB_REPOSITORY" --target 'c3c2d8802cec781e0e1088326320a0047d2f980a' --title 'AiSysAdmin v0.2.0' --notes-file "$RUNNER_TEMP/codex-release-notes.md"
